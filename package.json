@@ -13,6 +13,9 @@
     "vr",
     "store"
   ],
+  "dependencies": {
+    "firebase-admin": "^13.0.0"
+  },
   "author": "",
   "license": "MIT"
 }

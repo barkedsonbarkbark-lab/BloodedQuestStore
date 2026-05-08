@@ -2,17 +2,44 @@ const http = require("http");
 const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
+let firebaseAdmin = null;
+
+try {
+  firebaseAdmin = require("firebase-admin");
+} catch {
+  firebaseAdmin = null;
+}
 
 const PORT = Number(process.env.PORT || 3000);
 const ROOT = __dirname;
+loadEnvFile(path.join(ROOT, ".env"));
 const PUBLIC_DIR = path.join(ROOT, "public");
 const DATA_DIR = path.join(ROOT, "data");
 const UPLOAD_DIR = path.join(ROOT, "uploads");
 const LISTINGS_FILE = path.join(DATA_DIR, "listings.json");
 const ACCOUNTS_FILE = path.join(DATA_DIR, "accounts.json");
 const SESSIONS_FILE = path.join(DATA_DIR, "sessions.json");
+const FIRESTORE_PREFIX = cleanCollectionPrefix(process.env.FIRESTORE_PREFIX || "bqs");
 const MAX_UPLOAD_BYTES = 350 * 1024 * 1024;
 const SESSION_DAYS = 14;
+let firestoreDb = null;
+
+function loadEnvFile(filePath) {
+  if (!fs.existsSync(filePath)) return;
+
+  const lines = fs.readFileSync(filePath, "utf8").split(/\r?\n/);
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) continue;
+    const index = trimmed.indexOf("=");
+    if (index === -1) continue;
+    const key = trimmed.slice(0, index).trim();
+    const value = trimmed.slice(index + 1).trim();
+    if (key && process.env[key] === undefined) {
+      process.env[key] = value;
+    }
+  }
+}
 
 const MIME_TYPES = {
   ".html": "text/html; charset=utf-8",
@@ -34,13 +61,14 @@ const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, `http://${req.headers.host}`);
 
     if (req.method === "GET" && url.pathname === "/api/games") {
+      const listings = await readListings();
       return sendJson(res, 200, {
-        published: publicListings(readListings())
+        published: publicListings(listings.filter(listing => !listing.visibility || listing.visibility === "Public"))
       });
     }
 
     if (req.method === "GET" && url.pathname === "/api/session") {
-      return sendJson(res, 200, { account: getSessionAccount(req) });
+      return sendJson(res, 200, { account: await getSessionAccount(req) });
     }
 
     if (req.method === "POST" && url.pathname === "/api/auth/register") {
@@ -52,17 +80,17 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (req.method === "POST" && url.pathname === "/api/auth/logout") {
-      clearSession(req);
+      await clearSession(req);
       res.setHeader("Set-Cookie", cookieHeader("bqs_session", "", { maxAge: 0 }));
       return sendJson(res, 200, { ok: true });
     }
 
     if (req.method === "GET" && url.pathname === "/api/studio") {
-      const account = requireAccount(req, res);
+      const account = await requireAccount(req, res);
       if (!account) return;
       return sendJson(res, 200, {
         account,
-        listings: publicListings(readListings().filter(listing => listing.ownerId === account.id))
+        listings: publicListings((await readListings()).filter(listing => listing.ownerId === account.id))
       });
     }
 
@@ -108,11 +136,48 @@ server.listen(PORT, () => {
 });
 
 function ensureStorage() {
-  fs.mkdirSync(DATA_DIR, { recursive: true });
+  initializeFirestore();
   fs.mkdirSync(UPLOAD_DIR, { recursive: true });
-  for (const file of [LISTINGS_FILE, ACCOUNTS_FILE, SESSIONS_FILE]) {
-    if (!fs.existsSync(file)) fs.writeFileSync(file, "[]\n");
+  if (!firestoreDb) {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+    for (const file of [LISTINGS_FILE, ACCOUNTS_FILE, SESSIONS_FILE]) {
+      if (!fs.existsSync(file)) fs.writeFileSync(file, "[]\n");
+    }
   }
+}
+
+function initializeFirestore() {
+  if (!firebaseAdmin) return;
+
+  try {
+    if (!firebaseAdmin.apps.length) {
+      const credential = getFirebaseCredential();
+      if (credential) firebaseAdmin.initializeApp({ credential });
+      else firebaseAdmin.initializeApp();
+    }
+    firestoreDb = firebaseAdmin.firestore();
+    console.log(`Using Firebase Firestore collections with prefix "${FIRESTORE_PREFIX}".`);
+  } catch (error) {
+    firestoreDb = null;
+    console.warn(`Firestore disabled, using local JSON files instead: ${error.message}`);
+  }
+}
+
+function getFirebaseCredential() {
+  if (process.env.FIREBASE_SERVICE_ACCOUNT_BASE64) {
+    const json = Buffer.from(process.env.FIREBASE_SERVICE_ACCOUNT_BASE64, "base64").toString("utf8");
+    return firebaseAdmin.credential.cert(JSON.parse(json));
+  }
+
+  if (process.env.FIREBASE_SERVICE_ACCOUNT_JSON) {
+    return firebaseAdmin.credential.cert(JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_JSON));
+  }
+
+  if (process.env.GOOGLE_APPLICATION_CREDENTIALS) {
+    return firebaseAdmin.credential.applicationDefault();
+  }
+
+  return null;
 }
 
 function readJsonFile(file) {
@@ -127,28 +192,77 @@ function writeJsonFile(file, data) {
   fs.writeFileSync(file, `${JSON.stringify(data, null, 2)}\n`);
 }
 
-function readListings() {
-  return readJsonFile(LISTINGS_FILE);
+async function readListings() {
+  return readCollection("listings", LISTINGS_FILE, "publishedAt");
 }
 
-function writeListings(listings) {
-  writeJsonFile(LISTINGS_FILE, listings);
+async function writeListings(listings) {
+  return writeCollection("listings", LISTINGS_FILE, listings);
 }
 
-function readAccounts() {
-  return readJsonFile(ACCOUNTS_FILE);
+async function readAccounts() {
+  return readCollection("accounts", ACCOUNTS_FILE, "createdAt");
 }
 
-function writeAccounts(accounts) {
-  writeJsonFile(ACCOUNTS_FILE, accounts);
+async function writeAccounts(accounts) {
+  return writeCollection("accounts", ACCOUNTS_FILE, accounts);
 }
 
-function readSessions() {
-  return readJsonFile(SESSIONS_FILE).filter(session => new Date(session.expiresAt).getTime() > Date.now());
+async function readSessions() {
+  const sessions = await readCollection("sessions", SESSIONS_FILE, "expiresAt");
+  return sessions.filter(session => new Date(session.expiresAt).getTime() > Date.now());
 }
 
-function writeSessions(sessions) {
-  writeJsonFile(SESSIONS_FILE, sessions);
+async function writeSessions(sessions) {
+  return writeCollection("sessions", SESSIONS_FILE, sessions);
+}
+
+async function readCollection(name, file, sortField) {
+  if (!firestoreDb) return readJsonFile(file);
+
+  const snapshot = await firestoreDb.collection(collectionName(name)).get();
+  if (snapshot.empty && fs.existsSync(file)) {
+    const localRecords = readJsonFile(file);
+    if (localRecords.length) {
+      await writeCollection(name, file, localRecords);
+      return localRecords;
+    }
+  }
+
+  return snapshot.docs
+    .map(doc => ({ id: doc.id, ...doc.data() }))
+    .sort((a, b) => String(b[sortField] || "").localeCompare(String(a[sortField] || "")));
+}
+
+async function writeCollection(name, file, records) {
+  if (!firestoreDb) {
+    writeJsonFile(file, records);
+    return;
+  }
+
+  const collection = firestoreDb.collection(collectionName(name));
+  const snapshot = await collection.get();
+  const nextIds = new Set(records.map(record => record.id || record.tokenHash));
+  const batch = firestoreDb.batch();
+
+  for (const doc of snapshot.docs) {
+    if (!nextIds.has(doc.id)) batch.delete(doc.ref);
+  }
+
+  for (const record of records) {
+    const id = record.id || record.tokenHash || crypto.randomUUID();
+    batch.set(collection.doc(id), { ...record, id }, { merge: false });
+  }
+
+  await batch.commit();
+}
+
+function collectionName(name) {
+  return `${FIRESTORE_PREFIX}_${name}`;
+}
+
+function cleanCollectionPrefix(value) {
+  return String(value || "bqs").replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 32) || "bqs";
 }
 
 async function handleRegister(req, res) {
@@ -165,7 +279,7 @@ async function handleRegister(req, res) {
     return sendJson(res, 400, { error: "Password must be at least 8 characters." });
   }
 
-  const accounts = readAccounts();
+  const accounts = await readAccounts();
   const existingIndex = accounts.findIndex(account => account.handle.toLowerCase() === handle.toLowerCase());
   if (existingIndex !== -1 && accounts[existingIndex].passwordHash) {
     return sendJson(res, 409, { error: "That creator handle is already taken." });
@@ -186,8 +300,8 @@ async function handleRegister(req, res) {
 
   if (existingIndex === -1) accounts.unshift(account);
   else accounts[existingIndex] = account;
-  writeAccounts(accounts);
-  createSession(res, account.id);
+  await writeAccounts(accounts);
+  await createSession(res, account.id);
   sendJson(res, 201, { account: publicAccount(account) });
 }
 
@@ -195,18 +309,18 @@ async function handleLogin(req, res) {
   const payload = await readJsonBody(req, 64 * 1024);
   const handle = cleanHandle(payload.handle);
   const password = String(payload.password || "");
-  const account = readAccounts().find(candidate => candidate.handle.toLowerCase() === handle.toLowerCase());
+  const account = (await readAccounts()).find(candidate => candidate.handle.toLowerCase() === handle.toLowerCase());
 
   if (!account || !account.passwordHash || !verifyPassword(password, account.passwordHash)) {
     return sendJson(res, 401, { error: "Invalid handle or password." });
   }
 
-  createSession(res, account.id);
+  await createSession(res, account.id);
   sendJson(res, 200, { account: publicAccount(account) });
 }
 
 async function handlePublish(req, res) {
-  const account = requireAccount(req, res);
+  const account = await requireAccount(req, res);
   if (!account) return;
 
   const upload = await readMultipart(req);
@@ -259,18 +373,18 @@ async function handlePublish(req, res) {
     colorB: pickColor(title, 1)
   };
 
-  const listings = readListings();
+  const listings = await readListings();
   listings.unshift(listing);
-  writeListings(listings);
+  await writeListings(listings);
   sendJson(res, 201, { listing: publicListing(listing) });
 }
 
 async function handleUpdateGame(req, res, id) {
-  const account = requireAccount(req, res);
+  const account = await requireAccount(req, res);
   if (!account) return;
 
   const payload = await readJsonBody(req, 64 * 1024);
-  const listings = readListings();
+  const listings = await readListings();
   const index = listings.findIndex(listing => listing.id === id);
 
   if (index === -1) return sendJson(res, 404, { error: "Game listing not found." });
@@ -294,15 +408,15 @@ async function handleUpdateGame(req, res, id) {
   next.colorA = pickColor(next.title, 0);
   next.colorB = pickColor(next.title, 1);
   listings[index] = next;
-  writeListings(listings);
+  await writeListings(listings);
   sendJson(res, 200, { listing: publicListing(next) });
 }
 
 async function handleReplaceApk(req, res, id) {
-  const account = requireAccount(req, res);
+  const account = await requireAccount(req, res);
   if (!account) return;
 
-  const listings = readListings();
+  const listings = await readListings();
   const index = listings.findIndex(listing => listing.id === id);
   if (index === -1) return sendJson(res, 404, { error: "Game listing not found." });
   if (listings[index].ownerId !== account.id) return sendJson(res, 403, { error: "You can only update your own APKs." });
@@ -328,15 +442,15 @@ async function handleReplaceApk(req, res, id) {
     updatedAt: new Date().toISOString()
   };
 
-  writeListings(listings);
+  await writeListings(listings);
   sendJson(res, 200, { listing: publicListing(listings[index]) });
 }
 
-function handleDeleteApk(req, res, id) {
-  const account = requireAccount(req, res);
+async function handleDeleteApk(req, res, id) {
+  const account = await requireAccount(req, res);
   if (!account) return;
 
-  const listings = readListings();
+  const listings = await readListings();
   const index = listings.findIndex(listing => listing.id === id);
   if (index === -1) return sendJson(res, 404, { error: "Game listing not found." });
   if (listings[index].ownerId !== account.id) return sendJson(res, 403, { error: "You can only delete your own APKs." });
@@ -350,7 +464,7 @@ function handleDeleteApk(req, res, id) {
     updatedAt: new Date().toISOString()
   };
 
-  writeListings(listings);
+  await writeListings(listings);
   sendJson(res, 200, { listing: publicListing(listings[index]) });
 }
 
@@ -439,32 +553,32 @@ function getDispositionValue(disposition, key) {
   return match ? match[1] : null;
 }
 
-function createSession(res, accountId) {
+async function createSession(res, accountId) {
   const token = crypto.randomBytes(32).toString("hex");
   const expiresAt = new Date(Date.now() + SESSION_DAYS * 24 * 60 * 60 * 1000).toISOString();
-  const sessions = readSessions();
+  const sessions = await readSessions();
   sessions.push({ tokenHash: sha256(token), accountId, expiresAt });
-  writeSessions(sessions);
+  await writeSessions(sessions);
   res.setHeader("Set-Cookie", cookieHeader("bqs_session", token, { maxAge: SESSION_DAYS * 24 * 60 * 60 }));
 }
 
-function clearSession(req) {
+async function clearSession(req) {
   const token = parseCookies(req).bqs_session;
   if (!token) return;
-  writeSessions(readSessions().filter(session => session.tokenHash !== sha256(token)));
+  await writeSessions((await readSessions()).filter(session => session.tokenHash !== sha256(token)));
 }
 
-function getSessionAccount(req) {
+async function getSessionAccount(req) {
   const token = parseCookies(req).bqs_session;
   if (!token) return null;
-  const session = readSessions().find(candidate => candidate.tokenHash === sha256(token));
+  const session = (await readSessions()).find(candidate => candidate.tokenHash === sha256(token));
   if (!session) return null;
-  const account = readAccounts().find(candidate => candidate.id === session.accountId);
+  const account = (await readAccounts()).find(candidate => candidate.id === session.accountId);
   return account ? publicAccount(account) : null;
 }
 
-function requireAccount(req, res) {
-  const account = getSessionAccount(req);
+async function requireAccount(req, res) {
+  const account = await getSessionAccount(req);
   if (!account) {
     sendJson(res, 401, { error: "Log in to continue." });
     return null;
