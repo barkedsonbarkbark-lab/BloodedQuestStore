@@ -210,6 +210,25 @@ h2 {
   color: var(--text);
 }
 
+.danger-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 48px;
+  padding: 0 18px;
+  border: 1px solid color-mix(in srgb, #ef4444, var(--line) 28%);
+  border-radius: 999px;
+  background: color-mix(in srgb, #ef4444, transparent 90%);
+  color: #ef4444;
+  font-weight: 730;
+  cursor: pointer;
+}
+
+.danger-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
 .hero-media {
   position: relative;
   min-height: 520px;
@@ -489,7 +508,10 @@ textarea:focus {
   box-shadow: var(--shadow);
 }
 
-.publish-form label {
+.publish-form label,
+.account-panel label,
+.creator-game label,
+.account-switcher label {
   display: grid;
   gap: 7px;
   color: var(--muted);
@@ -561,6 +583,90 @@ textarea:focus {
   padding-top: 0;
 }
 
+.dashboard-section {
+  padding: 64px clamp(18px, 5vw, 64px);
+}
+
+.dashboard-header {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 22px;
+  margin-bottom: 22px;
+}
+
+.account-switcher {
+  width: min(380px, 100%);
+}
+
+.dashboard-layout {
+  display: grid;
+  grid-template-columns: minmax(260px, 0.34fr) minmax(0, 1fr);
+  gap: 18px;
+  align-items: start;
+}
+
+.account-panel,
+.creator-game {
+  display: grid;
+  gap: 14px;
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel);
+}
+
+.account-panel {
+  position: sticky;
+  top: 92px;
+}
+
+.account-panel h3,
+.creator-game h3 {
+  margin-bottom: 0;
+  font-size: 22px;
+  line-height: 1.15;
+}
+
+.creator-games {
+  display: grid;
+  gap: 18px;
+}
+
+.creator-game {
+  box-shadow: var(--shadow);
+}
+
+.creator-game-head {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 16px;
+  padding-bottom: 4px;
+}
+
+.edit-game-form {
+  display: grid;
+  gap: 14px;
+}
+
+.apk-tools {
+  display: grid;
+  gap: 12px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+
+.compact-drop {
+  min-height: 128px;
+}
+
+.apk-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
 .empty-state {
   grid-column: 1 / -1;
   padding: 26px;
@@ -573,8 +679,13 @@ textarea:focus {
 @media (max-width: 1020px) {
   .hero,
   .publisher-band,
-  .spotlight {
+  .spotlight,
+  .dashboard-layout {
     grid-template-columns: 1fr;
+  }
+
+  .account-panel {
+    position: static;
   }
 
   .hero {
@@ -610,6 +721,7 @@ textarea:focus {
 
   .section-toolbar,
   .library-section,
+  .dashboard-header,
   .search-wrap {
     align-items: stretch;
     flex-direction: column;

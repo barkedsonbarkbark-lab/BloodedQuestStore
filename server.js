@@ -9,6 +9,7 @@ const PUBLIC_DIR = path.join(ROOT, "public");
 const DATA_DIR = path.join(ROOT, "data");
 const UPLOAD_DIR = path.join(ROOT, "uploads");
 const LISTINGS_FILE = path.join(DATA_DIR, "listings.json");
+const ACCOUNTS_FILE = path.join(DATA_DIR, "accounts.json");
 const MAX_UPLOAD_BYTES = 350 * 1024 * 1024;
 
 const MIME_TYPES = {
@@ -92,8 +93,30 @@ const server = http.createServer(async (req, res) => {
       });
     }
 
+    if (req.method === "GET" && url.pathname === "/api/accounts") {
+      return sendJson(res, 200, { accounts: readAccounts() });
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/accounts") {
+      return handleCreateAccount(req, res);
+    }
+
     if (req.method === "POST" && url.pathname === "/api/publish") {
       return handlePublish(req, res);
+    }
+
+    const gameMatch = url.pathname.match(/^\/api\/games\/([^/]+)$/);
+    if (gameMatch && req.method === "PATCH") {
+      return handleUpdateGame(req, res, gameMatch[1]);
+    }
+
+    const apkMatch = url.pathname.match(/^\/api\/games\/([^/]+)\/apk$/);
+    if (apkMatch && req.method === "POST") {
+      return handleReplaceApk(req, res, apkMatch[1]);
+    }
+
+    if (apkMatch && req.method === "DELETE") {
+      return handleDeleteApk(res, apkMatch[1]);
     }
 
     if (req.method === "GET" && url.pathname.startsWith("/uploads/")) {
@@ -121,6 +144,9 @@ function ensureStorage() {
   if (!fs.existsSync(LISTINGS_FILE)) {
     fs.writeFileSync(LISTINGS_FILE, "[]\n");
   }
+  if (!fs.existsSync(ACCOUNTS_FILE)) {
+    fs.writeFileSync(ACCOUNTS_FILE, "[]\n");
+  }
 }
 
 function readListings() {
@@ -133,6 +159,44 @@ function readListings() {
 
 function writeListings(listings) {
   fs.writeFileSync(LISTINGS_FILE, `${JSON.stringify(listings, null, 2)}\n`);
+}
+
+function readAccounts() {
+  try {
+    return JSON.parse(fs.readFileSync(ACCOUNTS_FILE, "utf8"));
+  } catch {
+    return [];
+  }
+}
+
+function writeAccounts(accounts) {
+  fs.writeFileSync(ACCOUNTS_FILE, `${JSON.stringify(accounts, null, 2)}\n`);
+}
+
+async function handleCreateAccount(req, res) {
+  const payload = await readJsonBody(req, 64 * 1024);
+  const displayName = cleanText(payload.displayName, 80);
+  const handle = cleanHandle(payload.handle || displayName);
+
+  if (!displayName || !handle) {
+    return sendJson(res, 400, { error: "Creator name and handle are required." });
+  }
+
+  const accounts = readAccounts();
+  if (accounts.some(account => account.handle.toLowerCase() === handle.toLowerCase())) {
+    return sendJson(res, 409, { error: "That creator handle is already taken." });
+  }
+
+  const account = {
+    id: crypto.randomUUID(),
+    displayName,
+    handle,
+    createdAt: new Date().toISOString()
+  };
+
+  accounts.unshift(account);
+  writeAccounts(accounts);
+  sendJson(res, 201, { account });
 }
 
 async function handlePublish(req, res) {
@@ -164,9 +228,14 @@ async function handlePublish(req, res) {
   const summary = cleanText(fields.summary, 220);
   const comfort = cleanText(fields.comfort, 40) || "Comfortable";
   const price = cleanText(fields.price, 20) || "Free";
+  const ownerId = cleanText(fields.ownerId, 80);
 
   if (!title || !studio || !genre || !summary) {
     return sendJson(res, 400, { error: "Title, studio, genre, and summary are required." });
+  }
+
+  if (!ownerId || !readAccounts().some(account => account.id === ownerId)) {
+    return sendJson(res, 400, { error: "Choose or create a creator account before publishing." });
   }
 
   const id = crypto.randomUUID();
@@ -185,7 +254,9 @@ async function handlePublish(req, res) {
     size: formatBytes(apk.data.length),
     apkName: path.basename(apk.filename),
     apkUrl: `/uploads/${storedName}`,
+    ownerId,
     publishedAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
     colorA: pickColor(title, 0),
     colorB: pickColor(title, 1)
   };
@@ -195,6 +266,102 @@ async function handlePublish(req, res) {
   writeListings(listings);
 
   sendJson(res, 201, { listing });
+}
+
+async function handleUpdateGame(req, res, id) {
+  const payload = await readJsonBody(req, 64 * 1024);
+  const listings = readListings();
+  const index = listings.findIndex(listing => listing.id === id);
+
+  if (index === -1) {
+    return sendJson(res, 404, { error: "Game listing not found." });
+  }
+
+  const next = {
+    ...listings[index],
+    title: cleanText(payload.title, 80),
+    studio: cleanText(payload.studio, 80),
+    genre: cleanText(payload.genre, 40),
+    summary: cleanText(payload.summary, 220),
+    comfort: cleanText(payload.comfort, 40) || "Comfortable",
+    price: cleanText(payload.price, 20) || "Free",
+    updatedAt: new Date().toISOString()
+  };
+
+  if (!next.title || !next.studio || !next.genre || !next.summary) {
+    return sendJson(res, 400, { error: "Title, studio, genre, and summary are required." });
+  }
+
+  next.colorA = pickColor(next.title, 0);
+  next.colorB = pickColor(next.title, 1);
+  listings[index] = next;
+  writeListings(listings);
+  sendJson(res, 200, { listing: next });
+}
+
+async function handleReplaceApk(req, res, id) {
+  const contentType = req.headers["content-type"] || "";
+  if (!contentType.includes("multipart/form-data")) {
+    return sendJson(res, 400, { error: "APK replacement must use multipart/form-data." });
+  }
+
+  const boundaryMatch = contentType.match(/boundary=(?:"([^"]+)"|([^;]+))/i);
+  if (!boundaryMatch) {
+    return sendJson(res, 400, { error: "Missing upload boundary." });
+  }
+
+  const listings = readListings();
+  const index = listings.findIndex(listing => listing.id === id);
+  if (index === -1) {
+    return sendJson(res, 404, { error: "Game listing not found." });
+  }
+
+  const body = await readRequestBody(req, MAX_UPLOAD_BYTES);
+  const { files } = parseMultipart(body, boundaryMatch[1] || boundaryMatch[2]);
+  const apk = files.apk;
+
+  if (!apk || !apk.filename) {
+    return sendJson(res, 400, { error: "Choose a replacement APK file." });
+  }
+
+  if (path.extname(apk.filename).toLowerCase() !== ".apk") {
+    return sendJson(res, 400, { error: "Only .apk files can be uploaded." });
+  }
+
+  removeStoredApk(listings[index]);
+  const storedName = `${id}-${Date.now()}.apk`;
+  fs.writeFileSync(path.join(UPLOAD_DIR, storedName), apk.data);
+
+  listings[index] = {
+    ...listings[index],
+    size: formatBytes(apk.data.length),
+    apkName: path.basename(apk.filename),
+    apkUrl: `/uploads/${storedName}`,
+    updatedAt: new Date().toISOString()
+  };
+
+  writeListings(listings);
+  sendJson(res, 200, { listing: listings[index] });
+}
+
+function handleDeleteApk(res, id) {
+  const listings = readListings();
+  const index = listings.findIndex(listing => listing.id === id);
+  if (index === -1) {
+    return sendJson(res, 404, { error: "Game listing not found." });
+  }
+
+  removeStoredApk(listings[index]);
+  listings[index] = {
+    ...listings[index],
+    size: "No APK",
+    apkName: "",
+    apkUrl: "",
+    updatedAt: new Date().toISOString()
+  };
+
+  writeListings(listings);
+  sendJson(res, 200, { listing: listings[index] });
 }
 
 function readRequestBody(req, limit) {
@@ -215,6 +382,16 @@ function readRequestBody(req, limit) {
     req.on("end", () => resolve(Buffer.concat(chunks)));
     req.on("error", reject);
   });
+}
+
+async function readJsonBody(req, limit) {
+  const body = await readRequestBody(req, limit);
+  if (!body.length) return {};
+  try {
+    return JSON.parse(body.toString("utf8"));
+  } catch {
+    return {};
+  }
 }
 
 function parseMultipart(buffer, boundary) {
@@ -295,6 +472,16 @@ function serveUpload(urlPath, res) {
   });
 }
 
+function removeStoredApk(listing) {
+  if (!listing || !listing.apkUrl) return;
+  const fileName = path.basename(listing.apkUrl);
+  const filePath = path.join(UPLOAD_DIR, fileName);
+  if (!filePath.startsWith(UPLOAD_DIR)) return;
+  if (fs.existsSync(filePath)) {
+    fs.unlinkSync(filePath);
+  }
+}
+
 function sendJson(res, status, payload) {
   sendBuffer(res, status, Buffer.from(JSON.stringify(payload)), "application/json; charset=utf-8");
 }
@@ -317,6 +504,16 @@ function cleanText(value, maxLength) {
     .replace(/\s+/g, " ")
     .trim()
     .slice(0, maxLength);
+}
+
+function cleanHandle(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_]/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "")
+    .slice(0, 32);
 }
 
 function formatBytes(bytes) {
