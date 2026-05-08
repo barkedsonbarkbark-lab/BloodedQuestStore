@@ -734,10 +734,14 @@ function sendText(res, status, text) {
 }
 
 function sendBuffer(res, status, data, contentType) {
+  const cacheControl = contentType.startsWith("text/html") || contentType.startsWith("application/json")
+    ? "no-store"
+    : "public, max-age=3600";
+
   res.writeHead(status, {
     "Content-Type": contentType,
     "Content-Length": data.length,
-    "Cache-Control": contentType.startsWith("text/html") ? "no-store" : "public, max-age=3600",
+    "Cache-Control": cacheControl,
     "X-Content-Type-Options": "nosniff",
     "X-Frame-Options": "DENY",
     "Referrer-Policy": "same-origin"

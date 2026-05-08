@@ -1,7 +1,7 @@
 const state = {
   account: null,
-  published: [],
-  studioListings: [],
+  publicListings: [],
+  creatorListings: [],
   query: "",
   genre: "all",
   studioTab: "overview",
@@ -103,6 +103,11 @@ function bindEvents() {
     document.documentElement.classList.toggle("dark");
     localStorage.setItem("bqs-theme", document.documentElement.classList.contains("dark") ? "dark" : "light");
   });
+
+  window.addEventListener("focus", refreshFromServer);
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) refreshFromServer();
+  });
 }
 
 function restoreTheme() {
@@ -126,18 +131,27 @@ async function refreshData() {
     apiRequest("/api/games")
   ]);
   state.account = session.account;
-  state.published = games.published || [];
+  state.publicListings = games.published || [];
   await loadStudio();
+}
+
+async function refreshFromServer() {
+  try {
+    await refreshData();
+    render();
+  } catch {
+    // Keep the current page state if the refresh fails.
+  }
 }
 
 async function loadStudio() {
   if (!state.account) {
-    state.studioListings = [];
+    state.creatorListings = [];
     return;
   }
   const studio = await apiRequest("/api/studio");
   state.account = studio.account;
-  state.studioListings = studio.listings || [];
+  state.creatorListings = studio.listings || [];
 }
 
 async function submitAuth(event, mode) {
@@ -165,7 +179,7 @@ async function submitAuth(event, mode) {
 async function logout() {
   await apiRequest("/api/auth/logout", { method: "POST" });
   state.account = null;
-  state.studioListings = [];
+  state.creatorListings = [];
   render();
 }
 
@@ -254,11 +268,11 @@ async function deleteApk(gameId) {
 }
 
 function replaceListing(listing) {
-  const studioIndex = state.studioListings.findIndex(game => game.id === listing.id);
-  if (studioIndex !== -1) state.studioListings[studioIndex] = listing;
+  const studioIndex = state.creatorListings.findIndex(game => game.id === listing.id);
+  if (studioIndex !== -1) state.creatorListings[studioIndex] = listing;
 
-  const publicIndex = state.published.findIndex(game => game.id === listing.id);
-  if (publicIndex !== -1) state.published[publicIndex] = listing;
+  const publicIndex = state.publicListings.findIndex(game => game.id === listing.id);
+  if (publicIndex !== -1) state.publicListings[publicIndex] = listing;
 }
 
 function render() {
@@ -291,7 +305,7 @@ function renderAuth() {
 }
 
 function renderStore() {
-  const visiblePublished = state.published.filter(game => !game.visibility || game.visibility === "Public");
+  const visiblePublished = state.publicListings.filter(game => !game.visibility || game.visibility === "Public");
   const games = [...visiblePublished];
   const filtered = games.filter(game => {
     const matchesQuery = [game.title, game.studio, game.genre, game.summary].join(" ").toLowerCase().includes(state.query);
@@ -307,14 +321,14 @@ function renderStore() {
 function renderStudio() {
   renderStudioMetrics();
   elements.creatorGames.innerHTML = state.account
-    ? state.studioListings.map(renderDashboardGame).join("") || `<div class="empty-state">No games yet. Upload your first APK from the Upload tab.</div>`
+    ? state.creatorListings.map(renderDashboardGame).join("") || `<div class="empty-state">No games yet. Upload your first APK from the Upload tab.</div>`
     : `<div class="empty-state">Log in to manage your game catalog.</div>`;
 }
 
 function renderStudioMetrics() {
-  const count = state.studioListings.length;
-  const apkCount = state.studioListings.filter(game => game.hasApk).length;
-  const totalMb = state.studioListings.reduce((sum, game) => sum + sizeToMb(game.size), 0);
+  const count = state.creatorListings.length;
+  const apkCount = state.creatorListings.filter(game => game.hasApk).length;
+  const totalMb = state.creatorListings.reduce((sum, game) => sum + sizeToMb(game.size), 0);
   const name = state.account ? state.account.displayName : "Log in to view Studio";
 
   elements.overviewTitle.textContent = state.account ? `${name} Studio` : "Log in to view Studio";
@@ -460,7 +474,10 @@ function visibilityOptions(current) {
 }
 
 async function apiRequest(url, options) {
-  const response = await fetch(url, options);
+  const response = await fetch(url, {
+    cache: "no-store",
+    ...(options || {})
+  });
   const text = await response.text();
   let data = {};
 
