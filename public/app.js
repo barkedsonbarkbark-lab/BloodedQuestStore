@@ -1,95 +1,105 @@
 const state = {
-  featured: [],
+  account: null,
   published: [],
-  accounts: [],
-  activeAccountId: localStorage.getItem("bqs-active-account") || "",
+  studioListings: [],
   query: "",
-  genre: "all"
+  genre: "all",
+  studioTab: "overview",
+  authTab: "login"
 };
 
-const gameGrid = document.querySelector("#gameGrid");
-const publishedGrid = document.querySelector("#publishedGrid");
-const spotlight = document.querySelector("#spotlight");
-const searchInput = document.querySelector("#searchInput");
-const genreFilter = document.querySelector("#genreFilter");
-const publishForm = document.querySelector("#publishForm");
-const publishOwner = document.querySelector("#publishOwner");
-const apkInput = document.querySelector("#apkInput");
-const fileName = document.querySelector("#fileName");
-const formStatus = document.querySelector("#formStatus");
-const themeToggle = document.querySelector("#themeToggle");
-const accountForm = document.querySelector("#accountForm");
-const accountStatus = document.querySelector("#accountStatus");
-const activeAccount = document.querySelector("#activeAccount");
-const creatorGames = document.querySelector("#creatorGames");
+const elements = {
+  searchInput: document.querySelector("#searchInput"),
+  genreFilter: document.querySelector("#genreFilter"),
+  spotlight: document.querySelector("#spotlight"),
+  gameGrid: document.querySelector("#gameGrid"),
+  statGames: document.querySelector("#statGames"),
+  authShell: document.querySelector("#authShell"),
+  authStatus: document.querySelector("#authStatus"),
+  authTitle: document.querySelector("#authTitle"),
+  authDescription: document.querySelector("#authDescription"),
+  loginForm: document.querySelector("#loginForm"),
+  registerForm: document.querySelector("#registerForm"),
+  signedInCard: document.querySelector("#signedInCard"),
+  accountAvatar: document.querySelector("#accountAvatar"),
+  accountName: document.querySelector("#accountName"),
+  accountHandle: document.querySelector("#accountHandle"),
+  logoutButton: document.querySelector("#logoutButton"),
+  publishForm: document.querySelector("#publishForm"),
+  apkInput: document.querySelector("#apkInput"),
+  fileName: document.querySelector("#fileName"),
+  formStatus: document.querySelector("#formStatus"),
+  creatorGames: document.querySelector("#creatorGames"),
+  studioSummary: document.querySelector("#studioSummary"),
+  overviewTitle: document.querySelector("#overviewTitle"),
+  metricPublished: document.querySelector("#metricPublished"),
+  metricApks: document.querySelector("#metricApks"),
+  metricSize: document.querySelector("#metricSize"),
+  themeToggle: document.querySelector("#themeToggle")
+};
 
 init();
 
 async function init() {
   restoreTheme();
   bindEvents();
-  await loadData();
+  await loadApp();
 }
 
 function bindEvents() {
-  searchInput.addEventListener("input", event => {
+  elements.searchInput.addEventListener("input", event => {
     state.query = event.target.value.toLowerCase();
     renderStore();
   });
 
-  genreFilter.addEventListener("change", event => {
+  elements.genreFilter.addEventListener("change", event => {
     state.genre = event.target.value;
     renderStore();
   });
 
-  apkInput.addEventListener("change", () => {
-    const file = apkInput.files[0];
-    fileName.textContent = file ? file.name : "Drop APK here or choose file";
+  elements.loginForm.addEventListener("submit", event => submitAuth(event, "login"));
+  elements.registerForm.addEventListener("submit", event => submitAuth(event, "register"));
+  elements.logoutButton.addEventListener("click", logout);
+  elements.publishForm.addEventListener("submit", publishGame);
+
+  elements.apkInput.addEventListener("change", () => {
+    elements.fileName.textContent = elements.apkInput.files[0]?.name || "Drop APK here or choose file";
   });
 
-  publishForm.addEventListener("submit", publishGame);
-  accountForm.addEventListener("submit", createAccount);
-
-  activeAccount.addEventListener("change", event => {
-    state.activeAccountId = event.target.value;
-    localStorage.setItem("bqs-active-account", state.activeAccountId);
-    renderAccounts();
-    renderDashboard();
+  document.querySelectorAll("[data-auth-tab]").forEach(button => {
+    button.addEventListener("click", () => {
+      state.authTab = button.dataset.authTab;
+      renderAuth();
+    });
   });
 
-  publishOwner.addEventListener("change", event => {
-    state.activeAccountId = event.target.value;
-    localStorage.setItem("bqs-active-account", state.activeAccountId);
-    renderAccounts();
-    renderDashboard();
+  document.querySelectorAll("[data-studio-tab]").forEach(button => {
+    button.addEventListener("click", () => {
+      state.studioTab = button.dataset.studioTab;
+      renderStudioTabs();
+    });
   });
 
-  creatorGames.addEventListener("submit", event => {
+  elements.creatorGames.addEventListener("submit", event => {
     event.preventDefault();
     const form = event.target;
     const gameId = form.dataset.gameId;
-    if (form.classList.contains("edit-game-form")) {
-      updateGame(gameId, form);
-    }
-    if (form.classList.contains("replace-apk-form")) {
-      replaceApk(gameId, form);
-    }
+    if (form.classList.contains("edit-game-form")) updateGame(gameId, form);
+    if (form.classList.contains("replace-apk-form")) replaceApk(gameId, form);
   });
 
-  creatorGames.addEventListener("click", event => {
+  elements.creatorGames.addEventListener("click", event => {
     const button = event.target.closest("[data-delete-apk]");
-    if (button) {
-      deleteApk(button.dataset.deleteApk);
-    }
+    if (button) deleteApk(button.dataset.deleteApk);
   });
 
-  creatorGames.addEventListener("change", event => {
+  elements.creatorGames.addEventListener("change", event => {
     if (!event.target.matches(".replacement-apk")) return;
     const label = event.target.closest(".dropzone").querySelector("strong");
-    label.textContent = event.target.files[0] ? event.target.files[0].name : "Choose replacement APK";
+    label.textContent = event.target.files[0]?.name || "Choose replacement APK";
   });
 
-  themeToggle.addEventListener("click", () => {
+  elements.themeToggle.addEventListener("click", () => {
     document.documentElement.classList.toggle("dark");
     localStorage.setItem("bqs-theme", document.documentElement.classList.contains("dark") ? "dark" : "light");
   });
@@ -101,148 +111,126 @@ function restoreTheme() {
   }
 }
 
-async function loadData() {
-  const [gamesResponse, accountsResponse] = await Promise.all([
-    fetch("/api/games"),
-    fetch("/api/accounts")
-  ]);
-  const games = await gamesResponse.json();
-  const accountData = await accountsResponse.json();
-
-  state.featured = games.featured || [];
-  state.published = games.published || [];
-  state.accounts = accountData.accounts || [];
-
-  if (!state.accounts.some(account => account.id === state.activeAccountId)) {
-    state.activeAccountId = state.accounts[0]?.id || "";
-    if (state.activeAccountId) {
-      localStorage.setItem("bqs-active-account", state.activeAccountId);
-    }
+async function loadApp() {
+  try {
+    const [session, games] = await Promise.all([
+      apiRequest("/api/session"),
+      apiRequest("/api/games")
+    ]);
+    state.account = session.account;
+    state.published = games.published || [];
+    await loadStudio();
+    render();
+  } catch (error) {
+    renderOfflineError(error.message);
   }
-
-  render();
 }
 
-async function createAccount(event) {
-  event.preventDefault();
-  setStatus(accountStatus, "Creating account...");
+async function loadStudio() {
+  if (!state.account) {
+    state.studioListings = [];
+    return;
+  }
+  const studio = await apiRequest("/api/studio");
+  state.account = studio.account;
+  state.studioListings = studio.listings || [];
+}
 
-  const formData = new FormData(accountForm);
-  const payload = {
-    displayName: formData.get("displayName"),
-    handle: formData.get("handle")
-  };
+async function submitAuth(event, mode) {
+  event.preventDefault();
+  const form = mode === "login" ? elements.loginForm : elements.registerForm;
+  const payload = Object.fromEntries(new FormData(form).entries());
+  setStatus(elements.authStatus, mode === "login" ? "Logging in..." : "Creating account...");
 
   try {
-    const response = await fetch("/api/accounts", {
+    const result = await apiRequest(`/api/auth/${mode === "login" ? "login" : "register"}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload)
     });
-    const result = await response.json();
-
-    if (!response.ok) throw new Error(result.error || "Could not create account.");
-
-    state.accounts.unshift(result.account);
-    state.activeAccountId = result.account.id;
-    localStorage.setItem("bqs-active-account", state.activeAccountId);
-    accountForm.reset();
-    setStatus(accountStatus, "Account created.", "success");
+    state.account = result.account;
+    form.reset();
+    await loadStudio();
+    setStatus(elements.authStatus, "Signed in.", "success");
     render();
   } catch (error) {
-    setStatus(accountStatus, error.message, "error");
+    setStatus(elements.authStatus, error.message, "error");
   }
+}
+
+async function logout() {
+  await apiRequest("/api/auth/logout", { method: "POST" });
+  state.account = null;
+  state.studioListings = [];
+  render();
 }
 
 async function publishGame(event) {
   event.preventDefault();
-  setStatus(formStatus, "");
-
-  const file = apkInput.files[0];
-  if (!state.activeAccountId) {
-    setStatus(formStatus, "Create a creator account before publishing.", "error");
+  if (!state.account) {
+    setStatus(elements.formStatus, "Log in before publishing.", "error");
+    location.hash = "#account";
     return;
   }
 
+  const file = elements.apkInput.files[0];
   if (!file || !file.name.toLowerCase().endsWith(".apk")) {
-    setStatus(formStatus, "Choose an .apk file before publishing.", "error");
+    setStatus(elements.formStatus, "Choose an .apk file before publishing.", "error");
     return;
   }
 
-  const formData = new FormData(publishForm);
-  formData.set("ownerId", state.activeAccountId);
-  setStatus(formStatus, "Uploading APK and creating listing...");
-
+  setStatus(elements.formStatus, "Uploading APK and creating listing...");
   try {
-    const response = await fetch("/api/publish", {
+    const result = await apiRequest("/api/publish", {
       method: "POST",
-      body: formData
+      body: new FormData(elements.publishForm)
     });
-    const result = await response.json();
-
-    if (!response.ok) throw new Error(result.error || "Publish failed.");
-
+    state.studioListings.unshift(result.listing);
     state.published.unshift(result.listing);
-    publishForm.reset();
-    renderAccounts();
-    fileName.textContent = "Drop APK here or choose file";
-    setStatus(formStatus, "Published. Your APK listing is live locally.", "success");
+    elements.publishForm.reset();
+    elements.fileName.textContent = "Drop APK here or choose file";
+    setStatus(elements.formStatus, "Published. Your listing is live.", "success");
+    state.studioTab = "content";
     render();
-    document.querySelector("#dashboard").scrollIntoView({ behavior: "smooth", block: "start" });
   } catch (error) {
-    setStatus(formStatus, error.message, "error");
+    setStatus(elements.formStatus, error.message, "error");
   }
 }
 
 async function updateGame(gameId, form) {
-  const formData = new FormData(form);
-  const payload = Object.fromEntries(formData.entries());
   const status = form.querySelector(".form-status");
-  setStatus(status, "Saving changes...");
+  setStatus(status, "Saving...");
 
   try {
-    const response = await fetch(`/api/games/${gameId}`, {
+    const result = await apiRequest(`/api/games/${gameId}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload)
+      body: JSON.stringify(Object.fromEntries(new FormData(form).entries()))
     });
-    const result = await response.json();
-
-    if (!response.ok) throw new Error(result.error || "Could not save listing.");
-
     replaceListing(result.listing);
-    form.closest(".creator-game").querySelector(".creator-game-head h3").textContent = result.listing.title;
-    setStatus(status, "Listing updated.", "success");
+    setStatus(status, "Saved.", "success");
     renderStore();
-    renderLibrary();
+    renderStudioMetrics();
   } catch (error) {
     setStatus(status, error.message, "error");
   }
 }
 
 async function replaceApk(gameId, form) {
-  const input = form.querySelector(".replacement-apk");
   const status = form.querySelector(".form-status");
-  const file = input.files[0];
+  const file = form.querySelector(".replacement-apk").files[0];
 
   if (!file || !file.name.toLowerCase().endsWith(".apk")) {
     setStatus(status, "Choose a replacement .apk file.", "error");
     return;
   }
 
-  const formData = new FormData();
-  formData.append("apk", file);
+  const body = new FormData();
+  body.append("apk", file);
   setStatus(status, "Replacing APK...");
 
   try {
-    const response = await fetch(`/api/games/${gameId}/apk`, {
-      method: "POST",
-      body: formData
-    });
-    const result = await response.json();
-
-    if (!response.ok) throw new Error(result.error || "Could not replace APK.");
-
+    const result = await apiRequest(`/api/games/${gameId}/apk`, { method: "POST", body });
     replaceListing(result.listing);
     setStatus(status, "APK replaced.", "success");
     render();
@@ -253,75 +241,114 @@ async function replaceApk(gameId, form) {
 
 async function deleteApk(gameId) {
   if (!window.confirm("Delete the stored APK for this listing?")) return;
-  const response = await fetch(`/api/games/${gameId}/apk`, { method: "DELETE" });
-  const result = await response.json();
-
-  if (response.ok) {
+  try {
+    const result = await apiRequest(`/api/games/${gameId}/apk`, { method: "DELETE" });
     replaceListing(result.listing);
     render();
-  } else {
-    window.alert(result.error || "Could not delete APK.");
+  } catch (error) {
+    window.alert(error.message);
   }
 }
 
 function replaceListing(listing) {
-  const index = state.published.findIndex(game => game.id === listing.id);
-  if (index !== -1) {
-    state.published[index] = listing;
-  }
+  const studioIndex = state.studioListings.findIndex(game => game.id === listing.id);
+  if (studioIndex !== -1) state.studioListings[studioIndex] = listing;
+
+  const publicIndex = state.published.findIndex(game => game.id === listing.id);
+  if (publicIndex !== -1) state.published[publicIndex] = listing;
 }
 
 function render() {
-  renderAccounts();
+  renderAuth();
   renderStore();
-  renderDashboard();
-  renderLibrary();
+  renderStudio();
+  renderStudioTabs();
 }
 
-function renderAccounts() {
-  const options = state.accounts.length
-    ? state.accounts.map(account => `<option value="${account.id}" ${account.id === state.activeAccountId ? "selected" : ""}>${escapeHtml(account.displayName)} (@${escapeHtml(account.handle)})</option>`).join("")
-    : `<option value="">Create an account first</option>`;
+function renderAuth() {
+  document.querySelectorAll("[data-auth-tab]").forEach(button => {
+    button.classList.toggle("active", button.dataset.authTab === state.authTab);
+  });
 
-  activeAccount.innerHTML = options;
-  publishOwner.innerHTML = options;
-  publishOwner.value = state.activeAccountId;
+  elements.loginForm.classList.toggle("active", !state.account && state.authTab === "login");
+  elements.registerForm.classList.toggle("active", !state.account && state.authTab === "register");
+  elements.signedInCard.hidden = !state.account;
+  elements.logoutButton.hidden = !state.account;
+
+  if (state.account) {
+    elements.authTitle.textContent = "You are signed in";
+    elements.authDescription.textContent = "Your Studio tools are unlocked. Upload APKs, edit listings, and manage release files.";
+    elements.accountName.textContent = state.account.displayName;
+    elements.accountHandle.textContent = `@${state.account.handle}`;
+    elements.accountAvatar.textContent = initials(state.account.displayName);
+  } else {
+    elements.authTitle.textContent = "Log in or create your channel";
+    elements.authDescription.textContent = "Use a creator handle and password before publishing. Passwords are salted and hashed on the Node server.";
+  }
 }
 
 function renderStore() {
-  const games = [...state.published, ...state.featured];
+  const visiblePublished = state.published.filter(game => !game.visibility || game.visibility === "Public");
+  const games = [...visiblePublished];
   const filtered = games.filter(game => {
-    const matchesQuery = [game.title, game.studio, game.genre, game.summary]
-      .join(" ")
-      .toLowerCase()
-      .includes(state.query);
+    const matchesQuery = [game.title, game.studio, game.genre, game.summary].join(" ").toLowerCase().includes(state.query);
     const matchesGenre = state.genre === "all" || game.genre === state.genre;
     return matchesQuery && matchesGenre;
   });
 
-  renderSpotlight(games[0] || state.featured[0]);
-  gameGrid.innerHTML = filtered.map(renderCard).join("") || `<div class="empty-state">No games match that search.</div>`;
+  elements.statGames.textContent = String(games.length);
+  renderSpotlight(games[0]);
+  elements.gameGrid.innerHTML = filtered.map(renderCard).join("") || renderStoreEmptyState(games.length);
 }
 
-function renderDashboard() {
-  if (!state.activeAccountId) {
-    creatorGames.innerHTML = `<div class="empty-state">Create a creator account to manage game listings.</div>`;
-    return;
-  }
-
-  const games = state.published.filter(game => game.ownerId === state.activeAccountId);
-  creatorGames.innerHTML = games.map(renderDashboardGame).join("") || `<div class="empty-state">This account has no games yet.</div>`;
+function renderStudio() {
+  renderStudioMetrics();
+  elements.creatorGames.innerHTML = state.account
+    ? state.studioListings.map(renderDashboardGame).join("") || `<div class="empty-state">No games yet. Upload your first APK from the Upload tab.</div>`
+    : `<div class="empty-state">Log in to manage your game catalog.</div>`;
 }
 
-function renderLibrary() {
-  publishedGrid.innerHTML = state.published.map(renderCard).join("") || `<div class="empty-state">No local APKs published yet.</div>`;
+function renderStudioMetrics() {
+  const count = state.studioListings.length;
+  const apkCount = state.studioListings.filter(game => game.hasApk).length;
+  const totalMb = state.studioListings.reduce((sum, game) => sum + sizeToMb(game.size), 0);
+  const name = state.account ? state.account.displayName : "Log in to view Studio";
+
+  elements.overviewTitle.textContent = state.account ? `${name} Studio` : "Log in to view Studio";
+  elements.metricPublished.textContent = String(count);
+  elements.metricApks.textContent = String(apkCount);
+  elements.metricSize.textContent = `${totalMb.toFixed(totalMb >= 10 ? 0 : 1)} MB`;
+  elements.studioSummary.innerHTML = state.account
+    ? `<span class="avatar">${initials(name)}</span><strong>${escapeHtml(name)}</strong><p>@${escapeHtml(state.account.handle)}</p>`
+    : `<p>Sign in to upload APK builds and manage your listings.</p>`;
+}
+
+function renderStudioTabs() {
+  document.querySelectorAll("[data-studio-tab]").forEach(button => {
+    button.classList.toggle("active", button.dataset.studioTab === state.studioTab);
+  });
+  document.querySelectorAll(".studio-panel").forEach(panel => {
+    panel.classList.remove("active");
+  });
+  document.querySelector(`#${state.studioTab}Panel`).classList.add("active");
 }
 
 function renderSpotlight(game) {
-  if (!game) return;
-  spotlight.style.setProperty("--art-a", game.colorA);
-  spotlight.style.setProperty("--art-b", game.colorB);
-  spotlight.innerHTML = `
+  if (!game) {
+    elements.spotlight.removeAttribute("style");
+    elements.spotlight.innerHTML = `
+      <div class="spotlight-empty">
+        <p class="eyebrow">No creator uploads yet</p>
+        <h3>Be the first to publish an APK.</h3>
+        <p>The store only shows real games uploaded by creator accounts. No sample games, no seeded catalog, no fake listings.</p>
+        <a class="primary-button" href="#studio">Open Studio</a>
+      </div>
+    `;
+    return;
+  }
+  elements.spotlight.style.setProperty("--art-a", game.colorA);
+  elements.spotlight.style.setProperty("--art-b", game.colorB);
+  elements.spotlight.innerHTML = `
     <div class="spotlight-art" aria-hidden="true"></div>
     <div class="spotlight-body">
       <div class="meta-row">
@@ -332,17 +359,24 @@ function renderSpotlight(game) {
       <h3>${escapeHtml(game.title)}</h3>
       <p>${escapeHtml(game.summary)}</p>
       <div class="hero-actions">
-        ${game.apkUrl ? `<a class="primary-button" href="${game.apkUrl}" download>Download APK</a>` : `<a class="primary-button" href="#publish">Upload APK</a>`}
+        ${game.apkUrl ? `<a class="primary-button" href="${game.apkUrl}" download>Download APK</a>` : `<a class="primary-button" href="#studio">Upload APK</a>`}
         <span class="secondary-button">${escapeHtml(game.price)}</span>
       </div>
     </div>
   `;
 }
 
+function renderStoreEmptyState(totalGames) {
+  if (totalGames === 0) {
+    return `<div class="empty-state">No creator games have been uploaded yet. Log in, open Studio, and publish the first APK.</div>`;
+  }
+  return `<div class="empty-state">No uploaded games match that search.</div>`;
+}
+
 function renderCard(game) {
   const download = game.apkUrl
-    ? `<a class="secondary-button" href="${game.apkUrl}" download>APK</a>`
-    : `<span class="secondary-button">No APK</span>`;
+    ? `<a class="secondary-button small" href="${game.apkUrl}" download>APK</a>`
+    : `<span class="secondary-button small">No APK</span>`;
 
   return `
     <article class="game-card">
@@ -368,45 +402,25 @@ function renderDashboardGame(game) {
     <article class="creator-game">
       <div class="creator-game-head">
         <div>
-          <p class="eyebrow">${escapeHtml(game.apkName || "No APK uploaded")}</p>
+          <p class="eyebrow">${escapeHtml(game.visibility || "Public")} / ${escapeHtml(game.apkName || "No APK uploaded")}</p>
           <h3>${escapeHtml(game.title)}</h3>
         </div>
         <span class="chip">${escapeHtml(game.size)}</span>
       </div>
-
       <form class="edit-game-form" data-game-id="${game.id}">
         <div class="form-row">
-          <label>
-            Game title
-            <input name="title" required maxlength="80" value="${attr(game.title)}">
-          </label>
-          <label>
-            Studio
-            <input name="studio" required maxlength="80" value="${attr(game.studio)}">
-          </label>
+          <label>Game title<input name="title" required maxlength="80" value="${attr(game.title)}"></label>
+          <label>Price<input name="price" maxlength="20" value="${attr(game.price)}"></label>
         </div>
         <div class="form-row">
-          <label>
-            Genre
-            <select name="genre" required>${genreOptions(game.genre)}</select>
-          </label>
-          <label>
-            Price
-            <input name="price" maxlength="20" value="${attr(game.price)}">
-          </label>
+          <label>Genre<select name="genre" required>${genreOptions(game.genre)}</select></label>
+          <label>Visibility<select name="visibility">${visibilityOptions(game.visibility)}</select></label>
         </div>
-        <label>
-          Comfort
-          <select name="comfort">${comfortOptions(game.comfort)}</select>
-        </label>
-        <label>
-          Short description
-          <textarea name="summary" required maxlength="220">${escapeHtml(game.summary)}</textarea>
-        </label>
+        <label>Comfort<select name="comfort">${comfortOptions(game.comfort)}</select></label>
+        <label>Description<textarea name="summary" required maxlength="260">${escapeHtml(game.summary)}</textarea></label>
         <button class="primary-button submit-button" type="submit">Save listing</button>
         <p class="form-status" role="status"></p>
       </form>
-
       <form class="replace-apk-form apk-tools" data-game-id="${game.id}">
         <label class="dropzone compact-drop">
           <input class="replacement-apk" name="apk" type="file" accept=".apk,application/vnd.android.package-archive">
@@ -436,9 +450,58 @@ function comfortOptions(current) {
     .join("");
 }
 
+function visibilityOptions(current) {
+  return ["Public", "Unlisted", "Draft"]
+    .map(visibility => `<option ${visibility === current ? "selected" : ""}>${visibility}</option>`)
+    .join("");
+}
+
+async function apiRequest(url, options) {
+  const response = await fetch(url, options);
+  const text = await response.text();
+  let data = {};
+
+  if (text) {
+    try {
+      data = JSON.parse(text);
+    } catch {
+      throw new Error(`Server did not return JSON for ${url}. Start with "npm start" and open http://localhost:3000.`);
+    }
+  }
+
+  if (!response.ok) throw new Error(data.error || `Request failed: ${response.status}`);
+  return data;
+}
+
+function renderOfflineError(message) {
+  const html = `<div class="empty-state">${escapeHtml(message)}</div>`;
+  elements.gameGrid.innerHTML = html;
+  elements.creatorGames.innerHTML = html;
+  elements.spotlight.innerHTML = "";
+  setStatus(elements.authStatus, message, "error");
+}
+
 function setStatus(element, message, type) {
   element.textContent = message;
   element.className = `form-status ${type || ""}`.trim();
+}
+
+function initials(value) {
+  return String(value || "BQ")
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map(part => part[0].toUpperCase())
+    .join("");
+}
+
+function sizeToMb(size) {
+  const text = String(size || "");
+  const number = Number.parseFloat(text);
+  if (Number.isNaN(number)) return 0;
+  if (text.includes("GB")) return number * 1024;
+  if (text.includes("KB")) return number / 1024;
+  return number;
 }
 
 function attr(value) {

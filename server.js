@@ -10,7 +10,9 @@ const DATA_DIR = path.join(ROOT, "data");
 const UPLOAD_DIR = path.join(ROOT, "uploads");
 const LISTINGS_FILE = path.join(DATA_DIR, "listings.json");
 const ACCOUNTS_FILE = path.join(DATA_DIR, "accounts.json");
+const SESSIONS_FILE = path.join(DATA_DIR, "sessions.json");
 const MAX_UPLOAD_BYTES = 350 * 1024 * 1024;
+const SESSION_DAYS = 14;
 
 const MIME_TYPES = {
   ".html": "text/html; charset=utf-8",
@@ -27,78 +29,41 @@ const MIME_TYPES = {
 
 ensureStorage();
 
-const featuredListings = [
-  {
-    id: "starfall-arena",
-    title: "Starfall Arena",
-    studio: "Nova Relay",
-    genre: "Action",
-    price: "Free",
-    rating: "4.8",
-    size: "812 MB",
-    comfort: "Moderate",
-    colorA: "#7c3aed",
-    colorB: "#06b6d4",
-    summary: "Zero-gravity duels across orbital ruins with fast matchmaking."
-  },
-  {
-    id: "iron-trails",
-    title: "Iron Trails",
-    studio: "Anvil Room",
-    genre: "Adventure",
-    price: "$14.99",
-    rating: "4.6",
-    size: "1.4 GB",
-    comfort: "Comfortable",
-    colorA: "#ea580c",
-    colorB: "#84cc16",
-    summary: "Explore abandoned rail cities and rebuild machines by hand."
-  },
-  {
-    id: "pulse-lab",
-    title: "Pulse Lab",
-    studio: "Beat Foundry",
-    genre: "Music",
-    price: "$9.99",
-    rating: "4.9",
-    size: "524 MB",
-    comfort: "Intense",
-    colorA: "#db2777",
-    colorB: "#facc15",
-    summary: "A kinetic rhythm sandbox with custom beat chambers."
-  },
-  {
-    id: "quiet-orbit",
-    title: "Quiet Orbit",
-    studio: "Soft Horizon",
-    genre: "Puzzle",
-    price: "$7.99",
-    rating: "4.7",
-    size: "388 MB",
-    comfort: "Comfortable",
-    colorA: "#0f766e",
-    colorB: "#38bdf8",
-    summary: "A calm orbital logic puzzler built for seated VR play."
-  }
-];
-
 const server = http.createServer(async (req, res) => {
   try {
     const url = new URL(req.url, `http://${req.headers.host}`);
 
     if (req.method === "GET" && url.pathname === "/api/games") {
       return sendJson(res, 200, {
-        featured: featuredListings,
-        published: readListings()
+        published: publicListings(readListings())
       });
     }
 
-    if (req.method === "GET" && url.pathname === "/api/accounts") {
-      return sendJson(res, 200, { accounts: readAccounts() });
+    if (req.method === "GET" && url.pathname === "/api/session") {
+      return sendJson(res, 200, { account: getSessionAccount(req) });
     }
 
-    if (req.method === "POST" && url.pathname === "/api/accounts") {
-      return handleCreateAccount(req, res);
+    if (req.method === "POST" && url.pathname === "/api/auth/register") {
+      return handleRegister(req, res);
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/auth/login") {
+      return handleLogin(req, res);
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/auth/logout") {
+      clearSession(req);
+      res.setHeader("Set-Cookie", cookieHeader("bqs_session", "", { maxAge: 0 }));
+      return sendJson(res, 200, { ok: true });
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/studio") {
+      const account = requireAccount(req, res);
+      if (!account) return;
+      return sendJson(res, 200, {
+        account,
+        listings: publicListings(readListings().filter(listing => listing.ownerId === account.id))
+      });
     }
 
     if (req.method === "POST" && url.pathname === "/api/publish") {
@@ -116,7 +81,11 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (apkMatch && req.method === "DELETE") {
-      return handleDeleteApk(res, apkMatch[1]);
+      return handleDeleteApk(req, res, apkMatch[1]);
+    }
+
+    if (url.pathname.startsWith("/api/")) {
+      return sendJson(res, 404, { error: `API route not found: ${url.pathname}` });
     }
 
     if (req.method === "GET" && url.pathname.startsWith("/uploads/")) {
@@ -130,7 +99,7 @@ const server = http.createServer(async (req, res) => {
     sendJson(res, 405, { error: "Method not allowed" });
   } catch (error) {
     console.error(error);
-    sendJson(res, 500, { error: "Something went wrong on the server." });
+    sendJson(res, 500, { error: error.message || "Something went wrong on the server." });
   }
 });
 
@@ -141,77 +110,109 @@ server.listen(PORT, () => {
 function ensureStorage() {
   fs.mkdirSync(DATA_DIR, { recursive: true });
   fs.mkdirSync(UPLOAD_DIR, { recursive: true });
-  if (!fs.existsSync(LISTINGS_FILE)) {
-    fs.writeFileSync(LISTINGS_FILE, "[]\n");
+  for (const file of [LISTINGS_FILE, ACCOUNTS_FILE, SESSIONS_FILE]) {
+    if (!fs.existsSync(file)) fs.writeFileSync(file, "[]\n");
   }
-  if (!fs.existsSync(ACCOUNTS_FILE)) {
-    fs.writeFileSync(ACCOUNTS_FILE, "[]\n");
+}
+
+function readJsonFile(file) {
+  try {
+    return JSON.parse(fs.readFileSync(file, "utf8"));
+  } catch {
+    return [];
   }
+}
+
+function writeJsonFile(file, data) {
+  fs.writeFileSync(file, `${JSON.stringify(data, null, 2)}\n`);
 }
 
 function readListings() {
-  try {
-    return JSON.parse(fs.readFileSync(LISTINGS_FILE, "utf8"));
-  } catch {
-    return [];
-  }
+  return readJsonFile(LISTINGS_FILE);
 }
 
 function writeListings(listings) {
-  fs.writeFileSync(LISTINGS_FILE, `${JSON.stringify(listings, null, 2)}\n`);
+  writeJsonFile(LISTINGS_FILE, listings);
 }
 
 function readAccounts() {
-  try {
-    return JSON.parse(fs.readFileSync(ACCOUNTS_FILE, "utf8"));
-  } catch {
-    return [];
-  }
+  return readJsonFile(ACCOUNTS_FILE);
 }
 
 function writeAccounts(accounts) {
-  fs.writeFileSync(ACCOUNTS_FILE, `${JSON.stringify(accounts, null, 2)}\n`);
+  writeJsonFile(ACCOUNTS_FILE, accounts);
 }
 
-async function handleCreateAccount(req, res) {
+function readSessions() {
+  return readJsonFile(SESSIONS_FILE).filter(session => new Date(session.expiresAt).getTime() > Date.now());
+}
+
+function writeSessions(sessions) {
+  writeJsonFile(SESSIONS_FILE, sessions);
+}
+
+async function handleRegister(req, res) {
   const payload = await readJsonBody(req, 64 * 1024);
   const displayName = cleanText(payload.displayName, 80);
   const handle = cleanHandle(payload.handle || displayName);
+  const password = String(payload.password || "");
 
   if (!displayName || !handle) {
     return sendJson(res, 400, { error: "Creator name and handle are required." });
   }
 
+  if (password.length < 8) {
+    return sendJson(res, 400, { error: "Password must be at least 8 characters." });
+  }
+
   const accounts = readAccounts();
-  if (accounts.some(account => account.handle.toLowerCase() === handle.toLowerCase())) {
+  const existingIndex = accounts.findIndex(account => account.handle.toLowerCase() === handle.toLowerCase());
+  if (existingIndex !== -1 && accounts[existingIndex].passwordHash) {
     return sendJson(res, 409, { error: "That creator handle is already taken." });
   }
 
-  const account = {
+  const account = existingIndex === -1 ? {
     id: crypto.randomUUID(),
     displayName,
     handle,
+    passwordHash: hashPassword(password),
     createdAt: new Date().toISOString()
+  } : {
+    ...accounts[existingIndex],
+    displayName,
+    passwordHash: hashPassword(password),
+    updatedAt: new Date().toISOString()
   };
 
-  accounts.unshift(account);
+  if (existingIndex === -1) accounts.unshift(account);
+  else accounts[existingIndex] = account;
   writeAccounts(accounts);
-  sendJson(res, 201, { account });
+  createSession(res, account.id);
+  sendJson(res, 201, { account: publicAccount(account) });
+}
+
+async function handleLogin(req, res) {
+  const payload = await readJsonBody(req, 64 * 1024);
+  const handle = cleanHandle(payload.handle);
+  const password = String(payload.password || "");
+  const account = readAccounts().find(candidate => candidate.handle.toLowerCase() === handle.toLowerCase());
+
+  if (!account || !account.passwordHash || !verifyPassword(password, account.passwordHash)) {
+    return sendJson(res, 401, { error: "Invalid handle or password." });
+  }
+
+  createSession(res, account.id);
+  sendJson(res, 200, { account: publicAccount(account) });
 }
 
 async function handlePublish(req, res) {
-  const contentType = req.headers["content-type"] || "";
-  if (!contentType.includes("multipart/form-data")) {
-    return sendJson(res, 400, { error: "Publish requests must use multipart/form-data." });
-  }
+  const account = requireAccount(req, res);
+  if (!account) return;
 
-  const boundaryMatch = contentType.match(/boundary=(?:"([^"]+)"|([^;]+))/i);
-  if (!boundaryMatch) {
-    return sendJson(res, 400, { error: "Missing upload boundary." });
-  }
+  const upload = await readMultipart(req);
+  if (upload.error) return sendJson(res, 400, { error: upload.error });
 
-  const body = await readRequestBody(req, MAX_UPLOAD_BYTES);
-  const { fields, files } = parseMultipart(body, boundaryMatch[1] || boundaryMatch[2]);
+  const { fields, files } = upload;
   const apk = files.apk;
 
   if (!apk || !apk.filename) {
@@ -223,19 +224,14 @@ async function handlePublish(req, res) {
   }
 
   const title = cleanText(fields.title, 80);
-  const studio = cleanText(fields.studio, 80);
   const genre = cleanText(fields.genre, 40);
-  const summary = cleanText(fields.summary, 220);
+  const summary = cleanText(fields.summary, 260);
   const comfort = cleanText(fields.comfort, 40) || "Comfortable";
   const price = cleanText(fields.price, 20) || "Free";
-  const ownerId = cleanText(fields.ownerId, 80);
+  const visibility = cleanText(fields.visibility, 24) || "Public";
 
-  if (!title || !studio || !genre || !summary) {
-    return sendJson(res, 400, { error: "Title, studio, genre, and summary are required." });
-  }
-
-  if (!ownerId || !readAccounts().some(account => account.id === ownerId)) {
-    return sendJson(res, 400, { error: "Choose or create a creator account before publishing." });
+  if (!title || !genre || !summary) {
+    return sendJson(res, 400, { error: "Title, genre, and description are required." });
   }
 
   const id = crypto.randomUUID();
@@ -245,16 +241,18 @@ async function handlePublish(req, res) {
   const listing = {
     id,
     title,
-    studio,
+    studio: account.displayName,
     genre,
     summary,
     comfort,
     price,
+    visibility,
     rating: "New",
+    downloads: 0,
     size: formatBytes(apk.data.length),
     apkName: path.basename(apk.filename),
     apkUrl: `/uploads/${storedName}`,
-    ownerId,
+    ownerId: account.id,
     publishedAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
     colorA: pickColor(title, 0),
@@ -264,66 +262,56 @@ async function handlePublish(req, res) {
   const listings = readListings();
   listings.unshift(listing);
   writeListings(listings);
-
-  sendJson(res, 201, { listing });
+  sendJson(res, 201, { listing: publicListing(listing) });
 }
 
 async function handleUpdateGame(req, res, id) {
+  const account = requireAccount(req, res);
+  if (!account) return;
+
   const payload = await readJsonBody(req, 64 * 1024);
   const listings = readListings();
   const index = listings.findIndex(listing => listing.id === id);
 
-  if (index === -1) {
-    return sendJson(res, 404, { error: "Game listing not found." });
-  }
+  if (index === -1) return sendJson(res, 404, { error: "Game listing not found." });
+  if (listings[index].ownerId !== account.id) return sendJson(res, 403, { error: "You can only edit your own games." });
 
   const next = {
     ...listings[index],
     title: cleanText(payload.title, 80),
-    studio: cleanText(payload.studio, 80),
     genre: cleanText(payload.genre, 40),
-    summary: cleanText(payload.summary, 220),
+    summary: cleanText(payload.summary, 260),
     comfort: cleanText(payload.comfort, 40) || "Comfortable",
     price: cleanText(payload.price, 20) || "Free",
+    visibility: cleanText(payload.visibility, 24) || "Public",
     updatedAt: new Date().toISOString()
   };
 
-  if (!next.title || !next.studio || !next.genre || !next.summary) {
-    return sendJson(res, 400, { error: "Title, studio, genre, and summary are required." });
+  if (!next.title || !next.genre || !next.summary) {
+    return sendJson(res, 400, { error: "Title, genre, and description are required." });
   }
 
   next.colorA = pickColor(next.title, 0);
   next.colorB = pickColor(next.title, 1);
   listings[index] = next;
   writeListings(listings);
-  sendJson(res, 200, { listing: next });
+  sendJson(res, 200, { listing: publicListing(next) });
 }
 
 async function handleReplaceApk(req, res, id) {
-  const contentType = req.headers["content-type"] || "";
-  if (!contentType.includes("multipart/form-data")) {
-    return sendJson(res, 400, { error: "APK replacement must use multipart/form-data." });
-  }
-
-  const boundaryMatch = contentType.match(/boundary=(?:"([^"]+)"|([^;]+))/i);
-  if (!boundaryMatch) {
-    return sendJson(res, 400, { error: "Missing upload boundary." });
-  }
+  const account = requireAccount(req, res);
+  if (!account) return;
 
   const listings = readListings();
   const index = listings.findIndex(listing => listing.id === id);
-  if (index === -1) {
-    return sendJson(res, 404, { error: "Game listing not found." });
-  }
+  if (index === -1) return sendJson(res, 404, { error: "Game listing not found." });
+  if (listings[index].ownerId !== account.id) return sendJson(res, 403, { error: "You can only update your own APKs." });
 
-  const body = await readRequestBody(req, MAX_UPLOAD_BYTES);
-  const { files } = parseMultipart(body, boundaryMatch[1] || boundaryMatch[2]);
-  const apk = files.apk;
+  const upload = await readMultipart(req);
+  if (upload.error) return sendJson(res, 400, { error: upload.error });
 
-  if (!apk || !apk.filename) {
-    return sendJson(res, 400, { error: "Choose a replacement APK file." });
-  }
-
+  const apk = upload.files.apk;
+  if (!apk || !apk.filename) return sendJson(res, 400, { error: "Choose a replacement APK file." });
   if (path.extname(apk.filename).toLowerCase() !== ".apk") {
     return sendJson(res, 400, { error: "Only .apk files can be uploaded." });
   }
@@ -341,15 +329,17 @@ async function handleReplaceApk(req, res, id) {
   };
 
   writeListings(listings);
-  sendJson(res, 200, { listing: listings[index] });
+  sendJson(res, 200, { listing: publicListing(listings[index]) });
 }
 
-function handleDeleteApk(res, id) {
+function handleDeleteApk(req, res, id) {
+  const account = requireAccount(req, res);
+  if (!account) return;
+
   const listings = readListings();
   const index = listings.findIndex(listing => listing.id === id);
-  if (index === -1) {
-    return sendJson(res, 404, { error: "Game listing not found." });
-  }
+  if (index === -1) return sendJson(res, 404, { error: "Game listing not found." });
+  if (listings[index].ownerId !== account.id) return sendJson(res, 403, { error: "You can only delete your own APKs." });
 
   removeStoredApk(listings[index]);
   listings[index] = {
@@ -361,7 +351,20 @@ function handleDeleteApk(res, id) {
   };
 
   writeListings(listings);
-  sendJson(res, 200, { listing: listings[index] });
+  sendJson(res, 200, { listing: publicListing(listings[index]) });
+}
+
+async function readMultipart(req) {
+  const contentType = req.headers["content-type"] || "";
+  if (!contentType.includes("multipart/form-data")) {
+    return { error: "Request must use multipart/form-data." };
+  }
+
+  const boundaryMatch = contentType.match(/boundary=(?:"([^"]+)"|([^;]+))/i);
+  if (!boundaryMatch) return { error: "Missing upload boundary." };
+
+  const body = await readRequestBody(req, MAX_UPLOAD_BYTES);
+  return parseMultipart(body, boundaryMatch[1] || boundaryMatch[2]);
 }
 
 function readRequestBody(req, limit) {
@@ -420,11 +423,8 @@ function parseMultipart(buffer, boundary) {
       if (disposition) {
         const name = getDispositionValue(disposition[1], "name");
         const filename = getDispositionValue(disposition[1], "filename");
-        if (name && filename !== null) {
-          files[name] = { filename, data };
-        } else if (name) {
-          fields[name] = data.toString("utf8").trim();
-        }
+        if (name && filename !== null) files[name] = { filename, data };
+        else if (name) fields[name] = data.toString("utf8").trim();
       }
     }
 
@@ -439,14 +439,107 @@ function getDispositionValue(disposition, key) {
   return match ? match[1] : null;
 }
 
+function createSession(res, accountId) {
+  const token = crypto.randomBytes(32).toString("hex");
+  const expiresAt = new Date(Date.now() + SESSION_DAYS * 24 * 60 * 60 * 1000).toISOString();
+  const sessions = readSessions();
+  sessions.push({ tokenHash: sha256(token), accountId, expiresAt });
+  writeSessions(sessions);
+  res.setHeader("Set-Cookie", cookieHeader("bqs_session", token, { maxAge: SESSION_DAYS * 24 * 60 * 60 }));
+}
+
+function clearSession(req) {
+  const token = parseCookies(req).bqs_session;
+  if (!token) return;
+  writeSessions(readSessions().filter(session => session.tokenHash !== sha256(token)));
+}
+
+function getSessionAccount(req) {
+  const token = parseCookies(req).bqs_session;
+  if (!token) return null;
+  const session = readSessions().find(candidate => candidate.tokenHash === sha256(token));
+  if (!session) return null;
+  const account = readAccounts().find(candidate => candidate.id === session.accountId);
+  return account ? publicAccount(account) : null;
+}
+
+function requireAccount(req, res) {
+  const account = getSessionAccount(req);
+  if (!account) {
+    sendJson(res, 401, { error: "Log in to continue." });
+    return null;
+  }
+  return account;
+}
+
+function parseCookies(req) {
+  return String(req.headers.cookie || "")
+    .split(";")
+    .map(cookie => cookie.trim())
+    .filter(Boolean)
+    .reduce((cookies, pair) => {
+      const index = pair.indexOf("=");
+      if (index === -1) return cookies;
+      cookies[pair.slice(0, index)] = decodeURIComponent(pair.slice(index + 1));
+      return cookies;
+    }, {});
+}
+
+function cookieHeader(name, value, options = {}) {
+  const parts = [
+    `${name}=${encodeURIComponent(value)}`,
+    "Path=/",
+    "HttpOnly",
+    "SameSite=Lax"
+  ];
+  if (options.maxAge !== undefined) parts.push(`Max-Age=${options.maxAge}`);
+  return parts.join("; ");
+}
+
+function hashPassword(password) {
+  const salt = crypto.randomBytes(16).toString("hex");
+  const hash = crypto.pbkdf2Sync(password, salt, 120000, 32, "sha256").toString("hex");
+  return `pbkdf2_sha256$120000$${salt}$${hash}`;
+}
+
+function verifyPassword(password, stored) {
+  const [scheme, iterations, salt, expected] = String(stored).split("$");
+  if (scheme !== "pbkdf2_sha256" || !iterations || !salt || !expected) return false;
+  const actual = crypto.pbkdf2Sync(password, salt, Number(iterations), 32, "sha256");
+  const expectedBuffer = Buffer.from(expected, "hex");
+  return expectedBuffer.length === actual.length && crypto.timingSafeEqual(actual, expectedBuffer);
+}
+
+function sha256(value) {
+  return crypto.createHash("sha256").update(value).digest("hex");
+}
+
+function publicAccount(account) {
+  return {
+    id: account.id,
+    displayName: account.displayName,
+    handle: account.handle,
+    createdAt: account.createdAt
+  };
+}
+
+function publicListings(listings) {
+  return listings.map(publicListing);
+}
+
+function publicListing(listing) {
+  return {
+    ...listing,
+    hasApk: Boolean(listing.apkUrl)
+  };
+}
+
 function servePublic(urlPath, res) {
   const requestPath = urlPath === "/" ? "/index.html" : urlPath;
   const safePath = path.normalize(decodeURIComponent(requestPath)).replace(/^(\.\.[/\\])+/, "");
   const filePath = path.join(PUBLIC_DIR, safePath);
 
-  if (!filePath.startsWith(PUBLIC_DIR)) {
-    return sendText(res, 403, "Forbidden");
-  }
+  if (!filePath.startsWith(PUBLIC_DIR)) return sendText(res, 403, "Forbidden");
 
   fs.readFile(filePath, (error, data) => {
     if (error) {
@@ -477,9 +570,7 @@ function removeStoredApk(listing) {
   const fileName = path.basename(listing.apkUrl);
   const filePath = path.join(UPLOAD_DIR, fileName);
   if (!filePath.startsWith(UPLOAD_DIR)) return;
-  if (fs.existsSync(filePath)) {
-    fs.unlinkSync(filePath);
-  }
+  if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
 }
 
 function sendJson(res, status, payload) {
@@ -494,7 +585,10 @@ function sendBuffer(res, status, data, contentType) {
   res.writeHead(status, {
     "Content-Type": contentType,
     "Content-Length": data.length,
-    "X-Content-Type-Options": "nosniff"
+    "Cache-Control": contentType.startsWith("text/html") ? "no-store" : "public, max-age=3600",
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "DENY",
+    "Referrer-Policy": "same-origin"
   });
   res.end(data);
 }
