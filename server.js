@@ -214,7 +214,7 @@ async function readSessions() {
 }
 
 async function writeSessions(sessions) {
-  return writeCollection("sessions", SESSIONS_FILE, sessions);
+  return writeCollection("sessions", SESSIONS_FILE, sessions, { deleteMissing: true });
 }
 
 async function readCollection(name, file, sortField) {
@@ -234,19 +234,21 @@ async function readCollection(name, file, sortField) {
     .sort((a, b) => String(b[sortField] || "").localeCompare(String(a[sortField] || "")));
 }
 
-async function writeCollection(name, file, records) {
+async function writeCollection(name, file, records, options = {}) {
   if (!firestoreDb) {
     writeJsonFile(file, records);
     return;
   }
 
   const collection = firestoreDb.collection(collectionName(name));
-  const snapshot = await collection.get();
-  const nextIds = new Set(records.map(record => record.id || record.tokenHash));
   const batch = firestoreDb.batch();
 
-  for (const doc of snapshot.docs) {
-    if (!nextIds.has(doc.id)) batch.delete(doc.ref);
+  if (options.deleteMissing) {
+    const snapshot = await collection.get();
+    const nextIds = new Set(records.map(record => record.id || record.tokenHash));
+    for (const doc of snapshot.docs) {
+      if (!nextIds.has(doc.id)) batch.delete(doc.ref);
+    }
   }
 
   for (const record of records) {
@@ -381,6 +383,7 @@ async function handlePublish(req, res) {
   const listings = await readListings();
   listings.unshift(listing);
   await writeListings(listings);
+  await assertListingWasSaved(id);
   sendJson(res, 201, { listing: publicListing(listing) });
 }
 
@@ -414,6 +417,7 @@ async function handleUpdateGame(req, res, id) {
   next.colorB = pickColor(next.title, 1);
   listings[index] = next;
   await writeListings(listings);
+  await assertListingWasSaved(id);
   sendJson(res, 200, { listing: publicListing(next) });
 }
 
@@ -453,6 +457,7 @@ async function handleReplaceApk(req, res, id) {
   };
 
   await writeListings(listings);
+  await assertListingWasSaved(id);
   sendJson(res, 200, { listing: publicListing(listings[index]) });
 }
 
@@ -477,6 +482,7 @@ async function handleDeleteApk(req, res, id) {
   };
 
   await writeListings(listings);
+  await assertListingWasSaved(id);
   sendJson(res, 200, { listing: publicListing(listings[index]) });
 }
 
@@ -660,6 +666,13 @@ function publicListing(listing) {
   };
 }
 
+async function assertListingWasSaved(id) {
+  const saved = (await readListings()).some(listing => listing.id === id);
+  if (!saved) {
+    throw new Error("The APK uploaded, but the game listing was not saved. Try again.");
+  }
+}
+
 function servePublic(urlPath, res) {
   const requestPath = urlPath === "/" ? "/index.html" : urlPath;
   const safePath = path.normalize(decodeURIComponent(requestPath)).replace(/^(\.\.[/\\])+/, "");
@@ -694,6 +707,7 @@ function serveUpload(urlPath, res) {
 async function saveApk({ listingId, originalName, data }) {
   const safeName = safeFileName(originalName || "game.apk");
   const localName = `${listingId}-${Date.now()}-${safeName}`;
+  fs.mkdirSync(UPLOAD_DIR, { recursive: true });
   fs.writeFileSync(path.join(UPLOAD_DIR, localName), data);
   return {
     storage: "local",

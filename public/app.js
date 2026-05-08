@@ -113,17 +113,21 @@ function restoreTheme() {
 
 async function loadApp() {
   try {
-    const [session, games] = await Promise.all([
-      apiRequest("/api/session"),
-      apiRequest("/api/games")
-    ]);
-    state.account = session.account;
-    state.published = games.published || [];
-    await loadStudio();
+    await refreshData();
     render();
   } catch (error) {
     renderOfflineError(error.message);
   }
+}
+
+async function refreshData() {
+  const [session, games] = await Promise.all([
+    apiRequest("/api/session"),
+    apiRequest("/api/games")
+  ]);
+  state.account = session.account;
+  state.published = games.published || [];
+  await loadStudio();
 }
 
 async function loadStudio() {
@@ -181,17 +185,16 @@ async function publishGame(event) {
 
   setStatus(elements.formStatus, "Uploading APK and creating listing...");
   try {
-    const result = await apiRequest("/api/publish", {
+    await apiRequest("/api/publish", {
       method: "POST",
       body: new FormData(elements.publishForm)
     });
-    state.studioListings.unshift(result.listing);
-    state.published.unshift(result.listing);
     elements.publishForm.reset();
     elements.fileName.textContent = "Drop APK here or choose file";
-    setStatus(elements.formStatus, "Published. Your listing is live.", "success");
+    await refreshData();
     state.studioTab = "content";
     render();
+    setStatus(elements.formStatus, "Published and saved. Your listing is in Studio.", "success");
   } catch (error) {
     setStatus(elements.formStatus, error.message, "error");
   }
