@@ -136,7 +136,7 @@ server.listen(PORT, () => {
 });
 
 function ensureStorage() {
-  initializeFirestore();
+  initializeFirebase();
   fs.mkdirSync(UPLOAD_DIR, { recursive: true });
   if (!firestoreDb) {
     fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -146,7 +146,7 @@ function ensureStorage() {
   }
 }
 
-function initializeFirestore() {
+function initializeFirebase() {
   if (!firebaseAdmin) return;
 
   try {
@@ -349,8 +349,11 @@ async function handlePublish(req, res) {
   }
 
   const id = crypto.randomUUID();
-  const storedName = `${id}.apk`;
-  fs.writeFileSync(path.join(UPLOAD_DIR, storedName), apk.data);
+  const storedApk = await saveApk({
+    listingId: id,
+    originalName: apk.filename,
+    data: apk.data
+  });
 
   const listing = {
     id,
@@ -365,7 +368,9 @@ async function handlePublish(req, res) {
     downloads: 0,
     size: formatBytes(apk.data.length),
     apkName: path.basename(apk.filename),
-    apkUrl: `/uploads/${storedName}`,
+    apkUrl: storedApk.url,
+    apkKey: storedApk.key,
+    apkStorage: storedApk.storage,
     ownerId: account.id,
     publishedAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
@@ -430,15 +435,20 @@ async function handleReplaceApk(req, res, id) {
     return sendJson(res, 400, { error: "Only .apk files can be uploaded." });
   }
 
-  removeStoredApk(listings[index]);
-  const storedName = `${id}-${Date.now()}.apk`;
-  fs.writeFileSync(path.join(UPLOAD_DIR, storedName), apk.data);
+  await removeStoredApk(listings[index]);
+  const storedApk = await saveApk({
+    listingId: id,
+    originalName: apk.filename,
+    data: apk.data
+  });
 
   listings[index] = {
     ...listings[index],
     size: formatBytes(apk.data.length),
     apkName: path.basename(apk.filename),
-    apkUrl: `/uploads/${storedName}`,
+    apkUrl: storedApk.url,
+    apkKey: storedApk.key,
+    apkStorage: storedApk.storage,
     updatedAt: new Date().toISOString()
   };
 
@@ -455,12 +465,14 @@ async function handleDeleteApk(req, res, id) {
   if (index === -1) return sendJson(res, 404, { error: "Game listing not found." });
   if (listings[index].ownerId !== account.id) return sendJson(res, 403, { error: "You can only delete your own APKs." });
 
-  removeStoredApk(listings[index]);
+  await removeStoredApk(listings[index]);
   listings[index] = {
     ...listings[index],
     size: "No APK",
     apkName: "",
     apkUrl: "",
+    apkKey: "",
+    apkStorage: "",
     updatedAt: new Date().toISOString()
   };
 
@@ -679,9 +691,21 @@ function serveUpload(urlPath, res) {
   });
 }
 
-function removeStoredApk(listing) {
+async function saveApk({ listingId, originalName, data }) {
+  const safeName = safeFileName(originalName || "game.apk");
+  const localName = `${listingId}-${Date.now()}-${safeName}`;
+  fs.writeFileSync(path.join(UPLOAD_DIR, localName), data);
+  return {
+    storage: "local",
+    key: localName,
+    url: `/uploads/${localName}`
+  };
+}
+
+async function removeStoredApk(listing) {
   if (!listing || !listing.apkUrl) return;
-  const fileName = path.basename(listing.apkUrl);
+
+  const fileName = path.basename(listing.apkKey || listing.apkUrl);
   const filePath = path.join(UPLOAD_DIR, fileName);
   if (!filePath.startsWith(UPLOAD_DIR)) return;
   if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
@@ -722,6 +746,16 @@ function cleanHandle(value) {
     .replace(/-+/g, "-")
     .replace(/^-|-$/g, "")
     .slice(0, 32);
+}
+
+function safeFileName(value) {
+  const ext = path.extname(value).toLowerCase() || ".apk";
+  const base = path.basename(value, ext)
+    .replace(/[^a-zA-Z0-9._-]/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "")
+    .slice(0, 80) || "game";
+  return `${base}${ext === ".apk" ? ext : ".apk"}`;
 }
 
 function formatBytes(bytes) {
