@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Blooded Quest Store</title>
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body>
+    <header class="topbar">
+      <a class="brand" href="/" aria-label="Blooded Quest Store home">
+        <span class="brand-mark">BQ</span>
+        <span>Blooded Quest Store</span>
+      </a>
+      <nav class="nav" aria-label="Main navigation">
+        <a href="#store">Store</a>
+        <a href="#publish">Publish</a>
+        <a href="#library">Library</a>
+      </nav>
+      <button class="icon-button" id="themeToggle" type="button" aria-label="Toggle theme" title="Toggle theme">
+        <span aria-hidden="true">◐</span>
+      </button>
+    </header>
+
+    <main>
+      <section class="hero" aria-labelledby="heroTitle">
+        <div class="hero-media" aria-hidden="true">
+          <div class="visor">
+            <div class="lens lens-left"></div>
+            <div class="lens lens-right"></div>
+          </div>
+          <div class="game-tile tile-one"></div>
+          <div class="game-tile tile-two"></div>
+          <div class="game-tile tile-three"></div>
+        </div>
+        <div class="hero-copy">
+          <p class="eyebrow">APK-only VR publishing</p>
+          <h1 id="heroTitle">Blooded Quest Store</h1>
+          <p>Discover headset-ready games, upload Android APK builds, and publish a polished store listing from one clean Node.js portal.</p>
+          <div class="hero-actions">
+            <a class="primary-button" href="#publish">Publish APK</a>
+            <a class="secondary-button" href="#store">Browse store</a>
+          </div>
+        </div>
+      </section>
+
+      <section class="section-toolbar" id="store" aria-label="Store controls">
+        <div>
+          <p class="eyebrow">Storefront</p>
+          <h2>Fresh VR releases</h2>
+        </div>
+        <div class="search-wrap">
+          <input id="searchInput" type="search" placeholder="Search games, studios, genres">
+          <select id="genreFilter" aria-label="Filter by genre">
+            <option value="all">All genres</option>
+            <option value="Action">Action</option>
+            <option value="Adventure">Adventure</option>
+            <option value="Music">Music</option>
+            <option value="Puzzle">Puzzle</option>
+            <option value="Sports">Sports</option>
+            <option value="Horror">Horror</option>
+          </select>
+        </div>
+      </section>
+
+      <section class="featured-shell" aria-label="Featured game">
+        <article class="spotlight" id="spotlight"></article>
+      </section>
+
+      <section class="game-grid" id="gameGrid" aria-live="polite"></section>
+
+      <section class="publisher-band" id="publish">
+        <div class="publisher-copy">
+          <p class="eyebrow">Developer console</p>
+          <h2>Publish your game</h2>
+          <p>Upload an Android package, add the essential store details, and your listing appears instantly in the browse shelf. The server rejects anything that is not an `.apk` file.</p>
+          <div class="policy-row">
+            <span>APK only</span>
+            <span>Local storage</span>
+            <span>Instant listing</span>
+          </div>
+        </div>
+
+        <form class="publish-form" id="publishForm">
+          <label>
+            Game title
+            <input name="title" required maxlength="80" placeholder="Neon Rift">
+          </label>
+          <label>
+            Studio
+            <input name="studio" required maxlength="80" placeholder="Your studio">
+          </label>
+          <div class="form-row">
+            <label>
+              Genre
+              <select name="genre" required>
+                <option>Action</option>
+                <option>Adventure</option>
+                <option>Music</option>
+                <option>Puzzle</option>
+                <option>Sports</option>
+                <option>Horror</option>
+              </select>
+            </label>
+            <label>
+              Price
+              <input name="price" maxlength="20" placeholder="Free">
+            </label>
+          </div>
+          <label>
+            Comfort
+            <select name="comfort">
+              <option>Comfortable</option>
+              <option>Moderate</option>
+              <option>Intense</option>
+            </select>
+          </label>
+          <label>
+            Short description
+            <textarea name="summary" required maxlength="220" placeholder="Describe the core VR experience."></textarea>
+          </label>
+          <label class="dropzone" id="dropzone">
+            <input id="apkInput" name="apk" type="file" accept=".apk,application/vnd.android.package-archive" required>
+            <span class="drop-icon">⬆</span>
+            <strong id="fileName">Drop APK here or choose file</strong>
+            <small>Only `.apk` uploads are accepted by the browser and server.</small>
+          </label>
+          <button class="primary-button submit-button" type="submit">Publish game</button>
+          <p class="form-status" id="formStatus" role="status"></p>
+        </form>
+      </section>
+
+      <section class="library-section" id="library">
+        <div>
+          <p class="eyebrow">Your shelf</p>
+          <h2>Published locally</h2>
+        </div>
+        <div class="game-grid compact" id="publishedGrid"></div>
+      </section>
+    </main>
+
+    <script src="/app.js"></script>
+  </body>
+</html>

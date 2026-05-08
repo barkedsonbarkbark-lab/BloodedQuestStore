@@ -1,0 +1,18 @@
+{
+  "name": "blooded-quest-store",
+  "version": "1.0.0",
+  "description": "A Node.js APK-only VR game store and publishing portal.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "keywords": [
+    "node",
+    "apk",
+    "vr",
+    "store"
+  ],
+  "author": "",
+  "license": "MIT"
+}
