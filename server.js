@@ -68,7 +68,7 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "GET" && url.pathname === "/api/games") {
       const listings = await readListings();
       return sendJson(res, 200, {
-        published: publicListings(listings.filter(isStorefrontVisible))
+        published: storefrontListings(listings.filter(isStorefrontVisible))
       });
     }
 
@@ -662,6 +662,23 @@ function publicAccount(account) {
 
 function publicListings(listings) {
   return listings.map(publicListing);
+}
+
+function storefrontListings(listings) {
+  return listings.map(storefrontListing);
+}
+
+function storefrontListing(listing) {
+  const output = publicListing(listing);
+  if (output.isDownloadable) return output;
+  return {
+    ...output,
+    apkUrl: "",
+    apkKey: "",
+    apkStorage: "",
+    hasApk: false,
+    isDownloadable: false
+  };
 }
 
 function publicListing(listing) {
