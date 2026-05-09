@@ -272,7 +272,10 @@ function replaceListing(listing) {
   if (studioIndex !== -1) state.creatorListings[studioIndex] = listing;
 
   const publicIndex = state.publicListings.findIndex(game => game.id === listing.id);
-  if (publicIndex !== -1) state.publicListings[publicIndex] = listing;
+  const visibleInStore = isStorefrontVisible(listing);
+  if (publicIndex !== -1 && visibleInStore) state.publicListings[publicIndex] = listing;
+  else if (publicIndex !== -1) state.publicListings.splice(publicIndex, 1);
+  else if (visibleInStore) state.publicListings.unshift(listing);
 }
 
 function render() {
@@ -305,7 +308,7 @@ function renderAuth() {
 }
 
 function renderStore() {
-  const visiblePublished = state.publicListings.filter(game => !game.visibility || game.visibility === "Public");
+  const visiblePublished = state.publicListings.filter(isStorefrontVisible);
   const games = [...visiblePublished];
   const filtered = games.filter(game => {
     const matchesQuery = [game.title, game.studio, game.genre, game.summary].join(" ").toLowerCase().includes(state.query);
@@ -370,13 +373,14 @@ function renderSpotlight(game) {
     <div class="spotlight-body">
       <div class="meta-row">
         <span class="chip">${escapeHtml(game.genre)}</span>
+        <span class="chip status-chip">${escapeHtml(releaseStatus(game))}</span>
         <span class="chip">${escapeHtml(game.comfort)}</span>
         <span class="chip">${escapeHtml(game.size)}</span>
       </div>
       <h3>${escapeHtml(game.title)}</h3>
       <p>${escapeHtml(game.summary)}</p>
       <div class="hero-actions">
-        ${game.apkUrl ? `<a class="primary-button" href="${game.apkUrl}" download>Download APK</a>` : `<a class="primary-button" href="#studio">Upload APK</a>`}
+        ${downloadAction(game, "primary-button")}
         <span class="secondary-button">${escapeHtml(game.price)}</span>
       </div>
     </div>
@@ -391,23 +395,19 @@ function renderStoreEmptyState(totalGames) {
 }
 
 function renderCard(game) {
-  const download = game.apkUrl
-    ? `<a class="secondary-button small" href="${game.apkUrl}" download>APK</a>`
-    : `<span class="secondary-button small">No APK</span>`;
-
   return `
     <article class="game-card">
       <div class="card-art" style="--art-a:${game.colorA}; --art-b:${game.colorB}" aria-hidden="true"></div>
       <div class="game-card-body">
         <div class="meta-row">
           <span class="chip">${escapeHtml(game.genre)}</span>
-          <span class="chip">${escapeHtml(game.rating)}</span>
+          <span class="chip status-chip">${escapeHtml(releaseStatus(game))}</span>
         </div>
         <h3>${escapeHtml(game.title)}</h3>
         <p>${escapeHtml(game.summary)}</p>
         <div class="card-footer">
           <span>${escapeHtml(game.studio)}</span>
-          ${download}
+          ${downloadAction(game, "secondary-button small")}
         </div>
       </div>
     </article>
@@ -419,7 +419,7 @@ function renderDashboardGame(game) {
     <article class="creator-game">
       <div class="creator-game-head">
         <div>
-          <p class="eyebrow">${escapeHtml(game.visibility || "Public")} / ${escapeHtml(game.apkName || "No APK uploaded")}</p>
+          <p class="eyebrow">${escapeHtml(releaseStatus(game))} / ${escapeHtml(game.apkName || "No APK uploaded")}</p>
           <h3>${escapeHtml(game.title)}</h3>
         </div>
         <span class="chip">${escapeHtml(game.size)}</span>
@@ -431,7 +431,7 @@ function renderDashboardGame(game) {
         </div>
         <div class="form-row">
           <label>Genre<select name="genre" required>${genreOptions(game.genre)}</select></label>
-          <label>Visibility<select name="visibility">${visibilityOptions(game.visibility)}</select></label>
+          <label>Release status<select name="visibility">${visibilityOptions(game.visibility)}</select></label>
         </div>
         <label>Comfort<select name="comfort">${comfortOptions(game.comfort)}</select></label>
         <label>Description<textarea name="summary" required maxlength="260">${escapeHtml(game.summary)}</textarea></label>
@@ -468,9 +468,33 @@ function comfortOptions(current) {
 }
 
 function visibilityOptions(current) {
-  return ["Public", "Unlisted", "Draft"]
-    .map(visibility => `<option ${visibility === current ? "selected" : ""}>${visibility}</option>`)
+  const selected = releaseStatus({ visibility: current });
+  return ["Public", "Coming Soon", "Private"]
+    .map(visibility => `<option ${visibility === selected ? "selected" : ""}>${visibility}</option>`)
     .join("");
+}
+
+function releaseStatus(game) {
+  if (game.visibility === "Unlisted" || game.visibility === "Draft") return "Private";
+  return ["Public", "Coming Soon", "Private"].includes(game.visibility) ? game.visibility : "Public";
+}
+
+function isStorefrontVisible(game) {
+  return ["Public", "Coming Soon"].includes(releaseStatus(game));
+}
+
+function canDownload(game) {
+  return releaseStatus(game) === "Public" && Boolean(game.apkUrl);
+}
+
+function downloadAction(game, className) {
+  if (canDownload(game)) {
+    return `<a class="${className}" href="${game.apkUrl}" download>Download APK</a>`;
+  }
+  if (releaseStatus(game) === "Coming Soon") {
+    return `<span class="${className} disabled-button" aria-disabled="true">Coming soon</span>`;
+  }
+  return `<span class="${className} disabled-button" aria-disabled="true">No APK</span>`;
 }
 
 async function apiRequest(url, options) {

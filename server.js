@@ -22,6 +22,11 @@ const SESSIONS_FILE = path.join(DATA_DIR, "sessions.json");
 const FIRESTORE_PREFIX = cleanCollectionPrefix(process.env.FIRESTORE_PREFIX || "bqs");
 const MAX_UPLOAD_BYTES = 350 * 1024 * 1024;
 const SESSION_DAYS = 14;
+const RELEASE_STATUSES = ["Public", "Coming Soon", "Private"];
+const LEGACY_RELEASE_STATUSES = {
+  Unlisted: "Private",
+  Draft: "Private"
+};
 let firestoreDb = null;
 
 function loadEnvFile(filePath) {
@@ -63,7 +68,7 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "GET" && url.pathname === "/api/games") {
       const listings = await readListings();
       return sendJson(res, 200, {
-        published: publicListings(listings.filter(listing => !listing.visibility || listing.visibility === "Public"))
+        published: publicListings(listings.filter(isStorefrontVisible))
       });
     }
 
@@ -344,7 +349,7 @@ async function handlePublish(req, res) {
   const summary = cleanText(fields.summary, 260);
   const comfort = cleanText(fields.comfort, 40) || "Comfortable";
   const price = cleanText(fields.price, 20) || "Free";
-  const visibility = cleanText(fields.visibility, 24) || "Public";
+  const visibility = normalizeReleaseStatus(fields.visibility);
 
   if (!title || !genre || !summary) {
     return sendJson(res, 400, { error: "Title, genre, and description are required." });
@@ -405,7 +410,7 @@ async function handleUpdateGame(req, res, id) {
     summary: cleanText(payload.summary, 260),
     comfort: cleanText(payload.comfort, 40) || "Comfortable",
     price: cleanText(payload.price, 20) || "Free",
-    visibility: cleanText(payload.visibility, 24) || "Public",
+    visibility: normalizeReleaseStatus(payload.visibility),
     updatedAt: new Date().toISOString()
   };
 
@@ -660,10 +665,28 @@ function publicListings(listings) {
 }
 
 function publicListing(listing) {
+  const visibility = normalizeReleaseStatus(listing.visibility);
   return {
     ...listing,
-    hasApk: Boolean(listing.apkUrl)
+    visibility,
+    hasApk: Boolean(listing.apkUrl),
+    isDownloadable: isDownloadableListing({ ...listing, visibility })
   };
+}
+
+function normalizeReleaseStatus(value) {
+  const cleaned = cleanText(value, 24);
+  const legacy = LEGACY_RELEASE_STATUSES[cleaned];
+  if (legacy) return legacy;
+  return RELEASE_STATUSES.includes(cleaned) ? cleaned : "Public";
+}
+
+function isStorefrontVisible(listing) {
+  return ["Public", "Coming Soon"].includes(normalizeReleaseStatus(listing.visibility));
+}
+
+function isDownloadableListing(listing) {
+  return normalizeReleaseStatus(listing.visibility) === "Public" && Boolean(listing.apkUrl);
 }
 
 async function assertListingWasSaved(id) {

@@ -245,6 +245,12 @@ h3 {
   opacity: 0.45;
 }
 
+.disabled-button,
+.disabled-button:hover {
+  cursor: not-allowed;
+  opacity: 0.62;
+}
+
 .small {
   min-height: 38px;
   padding: 0 14px;
@@ -563,6 +569,11 @@ textarea:focus {
   color: var(--muted);
   font-size: 13px;
   font-weight: 700;
+}
+
+.status-chip {
+  color: var(--text);
+  background: var(--panel-strong);
 }
 
 .game-grid {
